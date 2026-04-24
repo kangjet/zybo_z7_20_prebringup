@@ -402,7 +402,7 @@ end
 
 //??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 // 9. 1-second UART logger:
-//    "RX OK=XXXXXXXX NG=XXXXXXXX S=XXXXXXXX F=................\r\n"
+//    "RX OK=XXXXXXXX NG=XXXXXXXX F=........................\r\n"
 //??????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
 function [7:0] nibble_ascii;
     input [3:0] n;
@@ -412,8 +412,8 @@ function [7:0] nibble_ascii;
     end
 endfunction
 
-// 58-byte log string
-// "RX OK=XXXXXXXX NG=XXXXXXXX S=XXXXXXXX F=................\r\n"
+// 54-byte log string
+// "RX OK=XXXXXXXX NG=XXXXXXXX F=........................\r\n"
 function [7:0] log_char;
     input [5:0] ptr;
     input [31:0] ok;
@@ -449,37 +449,34 @@ function [7:0] log_char;
             6'd24: log_char = nibble_ascii(ng[ 7: 4]);
             6'd25: log_char = nibble_ascii(ng[ 3: 0]);
             6'd26: log_char = 8'h20; // ' '
-            6'd27: log_char = 8'h53; // 'S'
+            6'd27: log_char = 8'h46; // 'F'
             6'd28: log_char = 8'h3D; // '='
-            6'd29: log_char = nibble_ascii(syms[31:28]);
-            6'd30: log_char = nibble_ascii(syms[27:24]);
-            6'd31: log_char = nibble_ascii(syms[23:20]);
-            6'd32: log_char = nibble_ascii(syms[19:16]);
-            6'd33: log_char = nibble_ascii(syms[15:12]);
-            6'd34: log_char = nibble_ascii(syms[11: 8]);
-            6'd35: log_char = nibble_ascii(syms[ 7: 4]);
-            6'd36: log_char = nibble_ascii(syms[ 3: 0]);
-            6'd37: log_char = 8'h20; // ' '
-            6'd38: log_char = 8'h46; // 'F'
-            6'd39: log_char = 8'h3D; // '='
-            6'd40: log_char = nibble_ascii(frame[95:92]);
-            6'd41: log_char = nibble_ascii(frame[91:88]);
-            6'd42: log_char = nibble_ascii(frame[87:84]);
-            6'd43: log_char = nibble_ascii(frame[83:80]);
-            6'd44: log_char = nibble_ascii(frame[79:76]);
-            6'd45: log_char = nibble_ascii(frame[75:72]);
-            6'd46: log_char = nibble_ascii(frame[71:68]);
-            6'd47: log_char = nibble_ascii(frame[67:64]);
-            6'd48: log_char = nibble_ascii(frame[63:60]);
-            6'd49: log_char = nibble_ascii(frame[59:56]);
-            6'd50: log_char = nibble_ascii(frame[55:52]);
-            6'd51: log_char = nibble_ascii(frame[51:48]);
-            6'd52: log_char = nibble_ascii(frame[47:44]);
-            6'd53: log_char = nibble_ascii(frame[43:40]);
-            6'd54: log_char = nibble_ascii(frame[39:36]);
-            6'd55: log_char = nibble_ascii(frame[35:32]);
-            6'd56: log_char = 8'h0D; // \r
-            6'd57: log_char = 8'h0A; // \n
+            6'd29: log_char = nibble_ascii(frame[95:92]);
+            6'd30: log_char = nibble_ascii(frame[91:88]);
+            6'd31: log_char = nibble_ascii(frame[87:84]);
+            6'd32: log_char = nibble_ascii(frame[83:80]);
+            6'd33: log_char = nibble_ascii(frame[79:76]);
+            6'd34: log_char = nibble_ascii(frame[75:72]);
+            6'd35: log_char = nibble_ascii(frame[71:68]);
+            6'd36: log_char = nibble_ascii(frame[67:64]);
+            6'd37: log_char = nibble_ascii(frame[63:60]);
+            6'd38: log_char = nibble_ascii(frame[59:56]);
+            6'd39: log_char = nibble_ascii(frame[55:52]);
+            6'd40: log_char = nibble_ascii(frame[51:48]);
+            6'd41: log_char = nibble_ascii(frame[47:44]);
+            6'd42: log_char = nibble_ascii(frame[43:40]);
+            6'd43: log_char = nibble_ascii(frame[39:36]);
+            6'd44: log_char = nibble_ascii(frame[35:32]);
+            6'd45: log_char = nibble_ascii(frame[31:28]);
+            6'd46: log_char = nibble_ascii(frame[27:24]);
+            6'd47: log_char = nibble_ascii(frame[23:20]);
+            6'd48: log_char = nibble_ascii(frame[19:16]);
+            6'd49: log_char = nibble_ascii(frame[15:12]);
+            6'd50: log_char = nibble_ascii(frame[11: 8]);
+            6'd51: log_char = nibble_ascii(frame[ 7: 4]);
+            6'd52: log_char = nibble_ascii(frame[ 3: 0]);
+            6'd53: log_char = 8'h0D; // \r
+            6'd54: log_char = 8'h0A; // \n
             default: log_char = 8'h00;
         endcase
     end
@@ -541,7 +538,7 @@ always @(posedge sys_clk or negedge rst_n) begin
             if (!uart_busy && !uart_start) begin
                 uart_data  <= log_char(log_ptr, log_ok, log_ng, log_syms, log_frame);
                 uart_start <= 1'b1;
-                if (log_ptr == 6'd57)
+                if (log_ptr == 6'd54)
                     log_active <= 1'b0;
                 else
                     log_ptr <= log_ptr + 6'd1;
