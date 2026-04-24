@@ -1,0 +1,534 @@
+`timescale 1ns/1ps
+//=============================================================
+// top_ilc3_rx_board.v  —  ILC3 RX Board Top (Board 2)
+// COM7 = UART (JE1, V12)   COM9 = JTAG
+//
+// PMOD JD (Bank 34, LVCMOS33): ilc3_amp[3:0], amp_valid,
+//                               frame_start, frame_end  ← TX board
+// PMOD JC (Bank 34, LVCMOS33): rx_ready_out, pkt_done_out → TX board
+//                               crc_pass_dbg, crc_fail_dbg → AD3
+// UART log every 1 s: "RX OK=XXXXXXXX NG=XXXXXXXX\r\n"
+//
+// Frame format expected (12 bytes):
+//   [AA][55][08][SEQ3][SEQ2][SEQ1][SEQ0][DE][AD][BE][EF][CRC8]
+// CRC-8 covers bytes 2-10 (poly=0x07, init=0x00)
+//=============================================================
+module top_ilc3_rx_board #(
+    parameter integer CLK_FREQ_HZ  = 125_000_000,
+    parameter integer UART_BAUD    = 115_200,
+    parameter integer VALID_DELAY  = 2,
+    parameter integer FRAME_DELAY  = 2
+)(
+    input  wire       sys_clk,
+    input  wire       rst_btn_n,       // BTN0, Zybo: LOW=idle, HIGH=pressed
+
+    // PMOD JD ← TX board (asynchronous to sys_clk)
+    input  wire [3:0] ilc3_amp,        // T14/T15/P14/R14
+    input  wire       ilc3_amp_valid,  // U14
+    input  wire       ilc3_frame_start,// U15
+    input  wire       ilc3_frame_end,  // V17
+
+    // PMOD JC → TX board + AD3
+    output reg        rx_ready_out,    // V15
+    output reg        pkt_done_out,    // W15
+    output reg        crc_pass_dbg,    // W14
+    output reg        crc_fail_dbg,    // Y14
+
+    // UART TX (JE1, V12)
+    output wire       uart_tx,
+
+    // LEDs
+    output wire [3:0] led
+);
+
+//─────────────────────────────────────────────────────────────
+// Derived constants
+//─────────────────────────────────────────────────────────────
+localparam integer CLKS_PER_BIT = CLK_FREQ_HZ / UART_BAUD;
+localparam integer SEC_COUNTS   = CLK_FREQ_HZ;
+
+//─────────────────────────────────────────────────────────────
+// 1. Reset synchronizer (POR + BTN0 active-HIGH press = reset)
+//    Zybo Z7 BTN0: idle=LOW, pressed=HIGH
+//─────────────────────────────────────────────────────────────
+reg [2:0] rst_sr = 3'b000;
+wire      rst_n  = rst_sr[2];
+always @(posedge sys_clk) begin
+    if (rst_btn_n) rst_sr <= 3'b000;   // BTN0 pressed (HIGH) → reset
+    else           rst_sr <= {rst_sr[1:0], 1'b1};
+end
+
+//─────────────────────────────────────────────────────────────
+// 2. 2-FF input synchronizers (PMOD async → sys_clk domain)
+//─────────────────────────────────────────────────────────────
+(* ASYNC_REG = "TRUE" *) reg [3:0] amp_s1,  amp_s2;
+(* ASYNC_REG = "TRUE" *) reg       av_s1,   av_s2;
+(* ASYNC_REG = "TRUE" *) reg       fs_s1,   fs_s2;
+(* ASYNC_REG = "TRUE" *) reg       fe_s1,   fe_s2;
+
+// av_s3: one extra pipeline stage for rising-edge detection
+// amp_in_valid_pulse fires exactly once per sample (on av_s2 rising edge)
+// 1-clock delay (av_s3→pulse) ensures amp_s2 is fully settled before rx_core samples it
+reg av_s3;
+reg av_s4;
+reg av_s5;
+reg fs_s3;
+reg fs_s4;
+reg fs_s5;
+
+always @(posedge sys_clk) begin
+    amp_s1 <= ilc3_amp;        amp_s2 <= amp_s1;
+    av_s1  <= ilc3_amp_valid;  av_s2  <= av_s1;
+    fs_s1  <= ilc3_frame_start;fs_s2  <= fs_s1;
+    fe_s1  <= ilc3_frame_end;  fe_s2  <= fe_s1;
+    av_s3  <= av_s2;
+    av_s4  <= av_s3;
+    av_s5  <= av_s4;
+    fs_s3  <= fs_s2;
+    fs_s4  <= fs_s3;
+    fs_s5  <= fs_s4;
+end
+
+wire amp_pulse_d1 = av_s2 & ~av_s3;
+wire amp_pulse_d2 = av_s3 & ~av_s4;
+wire amp_pulse_d3 = av_s4 & ~av_s5;
+wire fs_pulse_d1  = fs_s2 & ~fs_s3;
+wire fs_pulse_d2  = fs_s3 & ~fs_s4;
+wire fs_pulse_d3  = fs_s4 & ~fs_s5;
+
+wire amp_in_valid_pulse =
+    (VALID_DELAY == 1) ? amp_pulse_d1 :
+    (VALID_DELAY == 3) ? amp_pulse_d3 :
+                         amp_pulse_d2;
+
+wire frame_start_pulse =
+    (FRAME_DELAY == 1) ? fs_pulse_d1 :
+    (FRAME_DELAY == 3) ? fs_pulse_d3 :
+                         fs_pulse_d2;
+
+//─────────────────────────────────────────────────────────────
+// 3. CRC-8 (poly = 0x07, init = 0x00)
+//─────────────────────────────────────────────────────────────
+function [7:0] crc8_byte;
+    input [7:0] crc;
+    input [7:0] din;
+    integer     i;
+    reg   [7:0] c;
+    begin
+        c = crc ^ din;
+        for (i = 0; i < 8; i = i + 1)
+            c = c[7] ? ((c << 1) ^ 8'h07) : (c << 1);
+        crc8_byte = c;
+    end
+endfunction
+
+//─────────────────────────────────────────────────────────────
+// 4. ILC3 RX Core
+//─────────────────────────────────────────────────────────────
+wire [1:0] sym_out_w;
+wire       sym_out_valid_w;
+
+ilc3_rx_core #(
+    .SYMB_WIDTH(2),
+    .AMP_WIDTH (4)
+) u_rx_core (
+    .clk          (sys_clk),
+    .rst_n        (rst_n),
+    .frame_sync   (frame_start_pulse),
+    .amp_in       (amp_s2),       // synchronized input
+    .amp_in_valid (amp_in_valid_pulse),  // 1 pulse per sample (rising edge of av_s2)
+    .amp_in_ready (),             // open: core is always-ready
+    .sym_out      (sym_out_w),
+    .sym_out_valid(sym_out_valid_w),
+    .sym_out_ready(1'b1)          // always accept
+);
+
+//─────────────────────────────────────────────────────────────
+// 5. Frame synchronization via frame_start
+//    Sets "need_resync"; on the next sym_out_valid, reset
+//    byte/sym counters — aligns collection to frame boundary
+//─────────────────────────────────────────────────────────────
+reg need_resync;
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n)
+        need_resync <= 1'b1;   // start in resync mode
+    else if (frame_start_pulse)
+        need_resync <= 1'b1;   // new frame_start detected
+    else if (need_resync && sym_out_valid_w)
+        need_resync <= 1'b0;   // locked onto first symbol
+end
+
+//─────────────────────────────────────────────────────────────
+// 6. sym_to_byte + frame buffer (12 bytes)
+//─────────────────────────────────────────────────────────────
+reg [1:0] sym_in_byte;     // 0..3 symbols within current byte
+reg [5:0] sym_in_byte_acc; // 6 MSBs accumulated so far (shift in 2b each)
+reg [3:0] byte_cnt;        // 0..11 within frame
+reg [7:0] rx_buf [0:11];   // frame byte buffer
+reg       frame_done;      // pulse: 12 bytes received
+reg [95:0] last_frame;     // snapshot of most-recent 12-byte frame
+reg [4:0] sym_dbg_cnt;     // capture first 16 decoded symbols per frame
+reg [31:0] sym_dbg_acc;
+reg [31:0] last_syms;
+reg [3:0] amp_d1_cnt;
+reg [31:0] amp_d1_acc;
+reg [31:0] last_amps_d1;
+reg [3:0] amp_d2_cnt;
+reg [31:0] amp_d2_acc;
+reg [31:0] last_amps_d2;
+reg [3:0] amp_d3_cnt;
+reg [31:0] amp_d3_acc;
+reg [31:0] last_amps_d3;
+
+integer k;
+initial begin
+    for (k = 0; k < 12; k = k + 1)
+        rx_buf[k] = 8'h00;
+end
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        sym_in_byte     <= 2'd0;
+        sym_in_byte_acc <= 6'd0;
+        byte_cnt        <= 4'd0;
+        frame_done      <= 1'b0;
+        last_frame      <= 96'd0;
+        sym_dbg_cnt     <= 5'd0;
+        sym_dbg_acc     <= 32'd0;
+        last_syms       <= 32'd0;
+        amp_d1_cnt <= 4'd0; amp_d1_acc <= 32'd0; last_amps_d1 <= 32'd0;
+        amp_d2_cnt <= 4'd0; amp_d2_acc <= 32'd0; last_amps_d2 <= 32'd0;
+        amp_d3_cnt <= 4'd0; amp_d3_acc <= 32'd0; last_amps_d3 <= 32'd0;
+    end else begin
+        frame_done <= 1'b0;
+
+        if (frame_start_pulse) begin
+            amp_d1_cnt <= 4'd0; amp_d1_acc <= 32'd0;
+            amp_d2_cnt <= 4'd0; amp_d2_acc <= 32'd0;
+            amp_d3_cnt <= 4'd0; amp_d3_acc <= 32'd0;
+        end
+
+        if (amp_pulse_d1 && amp_d1_cnt < 4'd8) begin
+            amp_d1_cnt <= amp_d1_cnt + 4'd1;
+            amp_d1_acc <= {amp_d1_acc[27:0], amp_s2[3:0]};
+            if (amp_d1_cnt == 4'd7)
+                last_amps_d1 <= {amp_d1_acc[27:0], amp_s2[3:0]};
+        end
+        if (amp_pulse_d2 && amp_d2_cnt < 4'd8) begin
+            amp_d2_cnt <= amp_d2_cnt + 4'd1;
+            amp_d2_acc <= {amp_d2_acc[27:0], amp_s2[3:0]};
+            if (amp_d2_cnt == 4'd7)
+                last_amps_d2 <= {amp_d2_acc[27:0], amp_s2[3:0]};
+        end
+        if (amp_pulse_d3 && amp_d3_cnt < 4'd8) begin
+            amp_d3_cnt <= amp_d3_cnt + 4'd1;
+            amp_d3_acc <= {amp_d3_acc[27:0], amp_s2[3:0]};
+            if (amp_d3_cnt == 4'd7)
+                last_amps_d3 <= {amp_d3_acc[27:0], amp_s2[3:0]};
+        end
+
+        if (sym_out_valid_w) begin
+            if (need_resync) begin
+                // Resync: this is sym[0] of new frame
+                sym_in_byte     <= 2'd1;
+                sym_in_byte_acc <= {4'd0, sym_out_w};
+                byte_cnt        <= 4'd0;
+                sym_dbg_cnt     <= 5'd1;
+                sym_dbg_acc     <= {30'd0, sym_out_w};
+            end else begin
+                // Shift symbol into byte accumulator (MSB-first)
+                sym_in_byte_acc <= {sym_in_byte_acc[3:0], sym_out_w};
+                if (sym_dbg_cnt < 5'd16) begin
+                    sym_dbg_cnt <= sym_dbg_cnt + 5'd1;
+                    sym_dbg_acc <= {sym_dbg_acc[29:0], sym_out_w};
+                end
+
+                if (sym_in_byte == 2'd3) begin
+                    sym_in_byte <= 2'd0;
+                    rx_buf[byte_cnt] <= {sym_in_byte_acc[5:0], sym_out_w};
+
+                    if (byte_cnt == 4'd11) begin
+                        last_frame <= {
+                            rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3],
+                            rx_buf[4], rx_buf[5], rx_buf[6], rx_buf[7],
+                            rx_buf[8], rx_buf[9], rx_buf[10], {sym_in_byte_acc[5:0], sym_out_w}
+                        };
+                        last_syms  <= sym_dbg_acc;
+                        byte_cnt   <= 4'd0;
+                        frame_done <= 1'b1;
+                    end else begin
+                        byte_cnt <= byte_cnt + 4'd1;
+                    end
+                end else begin
+                    sym_in_byte <= sym_in_byte + 2'd1;
+                end
+            end
+        end
+    end
+end
+
+//─────────────────────────────────────────────────────────────
+// 7. CRC check FSM (sequential: 1 byte/clock over bytes 2..10)
+//─────────────────────────────────────────────────────────────
+localparam [1:0]
+    CK_IDLE   = 2'd0,
+    CK_CALC   = 2'd1,
+    CK_RESULT = 2'd2;
+
+reg [1:0] ck_state;
+reg [3:0] ck_idx;    // 2..10
+reg [7:0] ck_acc;
+reg [31:0] ok_cnt;
+reg [31:0] ng_cnt;
+
+reg crc_pass_r;
+reg crc_fail_r;
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        ck_state  <= CK_IDLE;
+        ck_idx    <= 4'd2;
+        ck_acc    <= 8'h00;
+        ok_cnt    <= 32'd0;
+        ng_cnt    <= 32'd0;
+        crc_pass_r<= 1'b0;
+        crc_fail_r<= 1'b0;
+    end else begin
+        crc_pass_r <= 1'b0;
+        crc_fail_r <= 1'b0;
+
+        case (ck_state)
+            CK_IDLE: begin
+                if (frame_done) begin
+                    ck_idx   <= 4'd2;
+                    ck_acc   <= 8'h00;
+                    ck_state <= CK_CALC;
+                end
+            end
+
+            CK_CALC: begin
+                // One CRC byte per clock
+                ck_acc <= crc8_byte(ck_acc, rx_buf[ck_idx]);
+                if (ck_idx == 4'd10)
+                    ck_state <= CK_RESULT;
+                else
+                    ck_idx <= ck_idx + 4'd1;
+            end
+
+            CK_RESULT: begin
+                if (ck_acc == rx_buf[11]) begin
+                    ok_cnt     <= ok_cnt + 1;
+                    crc_pass_r <= 1'b1;
+                end else begin
+                    ng_cnt     <= ng_cnt + 1;
+                    crc_fail_r <= 1'b1;
+                end
+                ck_state <= CK_IDLE;
+            end
+
+            default: ck_state <= CK_IDLE;
+        endcase
+    end
+end
+
+//─────────────────────────────────────────────────────────────
+// 8. PMOD JC output signals
+//─────────────────────────────────────────────────────────────
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        rx_ready_out <= 1'b0;
+        pkt_done_out <= 1'b0;
+        crc_pass_dbg <= 1'b0;
+        crc_fail_dbg <= 1'b0;
+    end else begin
+        rx_ready_out <= 1'b1;          // always ready
+        pkt_done_out <= frame_done;    // 1-clock pulse per frame received
+        crc_pass_dbg <= crc_pass_r;    // 1-clock pulse on CRC pass
+        crc_fail_dbg <= crc_fail_r;    // 1-clock pulse on CRC fail
+    end
+end
+
+//─────────────────────────────────────────────────────────────
+// 9. 1-second UART logger:
+//    "RX OK=XXXXXXXX NG=XXXXXXXX A=XXXXXXXX\r\n"
+//─────────────────────────────────────────────────────────────
+function [7:0] nibble_ascii;
+    input [3:0] n;
+    begin
+        nibble_ascii = (n < 4'd10) ? (8'h30 + {4'd0, n})
+                                   : (8'h37 + {4'd0, n}); // 0x37+10='A'
+    end
+endfunction
+
+// 64-byte log string
+// "RX OK=XXXXXXXX NG=XXXXXXXX A1=XXXXXXXX A2=XXXXXXXX A3=XXXXXXXX\r\n"
+function [7:0] log_char;
+    input [5:0] ptr;
+    input [31:0] ok;
+    input [31:0] ng;
+    input [31:0] ad1;
+    input [31:0] ad2;
+    input [31:0] ad3;
+    begin
+        case (ptr)
+            6'd0:  log_char = 8'h52; // 'R'
+            6'd1:  log_char = 8'h58; // 'X'
+            6'd2:  log_char = 8'h20; // ' '
+            6'd3:  log_char = 8'h4F; // 'O'
+            6'd4:  log_char = 8'h4B; // 'K'
+            6'd5:  log_char = 8'h3D; // '='
+            6'd6:  log_char = nibble_ascii(ok[31:28]);
+            6'd7:  log_char = nibble_ascii(ok[27:24]);
+            6'd8:  log_char = nibble_ascii(ok[23:20]);
+            6'd9:  log_char = nibble_ascii(ok[19:16]);
+            6'd10: log_char = nibble_ascii(ok[15:12]);
+            6'd11: log_char = nibble_ascii(ok[11: 8]);
+            6'd12: log_char = nibble_ascii(ok[ 7: 4]);
+            6'd13: log_char = nibble_ascii(ok[ 3: 0]);
+            6'd14: log_char = 8'h20; // ' '
+            6'd15: log_char = 8'h4E; // 'N'
+            6'd16: log_char = 8'h47; // 'G'
+            6'd17: log_char = 8'h3D; // '='
+            6'd18: log_char = nibble_ascii(ng[31:28]);
+            6'd19: log_char = nibble_ascii(ng[27:24]);
+            6'd20: log_char = nibble_ascii(ng[23:20]);
+            6'd21: log_char = nibble_ascii(ng[19:16]);
+            6'd22: log_char = nibble_ascii(ng[15:12]);
+            6'd23: log_char = nibble_ascii(ng[11: 8]);
+            6'd24: log_char = nibble_ascii(ng[ 7: 4]);
+            6'd25: log_char = nibble_ascii(ng[ 3: 0]);
+            6'd26: log_char = 8'h20; // ' '
+            6'd27: log_char = 8'h41; // 'A'
+            6'd28: log_char = 8'h31; // '1'
+            6'd29: log_char = 8'h3D; // '='
+            6'd30: log_char = nibble_ascii(ad1[31:28]);
+            6'd31: log_char = nibble_ascii(ad1[27:24]);
+            6'd32: log_char = nibble_ascii(ad1[23:20]);
+            6'd33: log_char = nibble_ascii(ad1[19:16]);
+            6'd34: log_char = nibble_ascii(ad1[15:12]);
+            6'd35: log_char = nibble_ascii(ad1[11: 8]);
+            6'd36: log_char = nibble_ascii(ad1[ 7: 4]);
+            6'd37: log_char = nibble_ascii(ad1[ 3: 0]);
+            6'd38: log_char = 8'h20; // ' '
+            6'd39: log_char = 8'h41; // 'A'
+            6'd40: log_char = 8'h32; // '2'
+            6'd41: log_char = 8'h3D; // '='
+            6'd42: log_char = nibble_ascii(ad2[31:28]);
+            6'd43: log_char = nibble_ascii(ad2[27:24]);
+            6'd44: log_char = nibble_ascii(ad2[23:20]);
+            6'd45: log_char = nibble_ascii(ad2[19:16]);
+            6'd46: log_char = nibble_ascii(ad2[15:12]);
+            6'd47: log_char = nibble_ascii(ad2[11: 8]);
+            6'd48: log_char = nibble_ascii(ad2[ 7: 4]);
+            6'd49: log_char = nibble_ascii(ad2[ 3: 0]);
+            6'd50: log_char = 8'h20; // ' '
+            6'd51: log_char = 8'h41; // 'A'
+            6'd52: log_char = 8'h33; // '3'
+            6'd53: log_char = 8'h3D; // '='
+            6'd54: log_char = nibble_ascii(ad3[31:28]);
+            6'd55: log_char = nibble_ascii(ad3[27:24]);
+            6'd56: log_char = nibble_ascii(ad3[23:20]);
+            6'd57: log_char = nibble_ascii(ad3[19:16]);
+            6'd58: log_char = nibble_ascii(ad3[15:12]);
+            6'd59: log_char = nibble_ascii(ad3[11: 8]);
+            6'd60: log_char = nibble_ascii(ad3[ 7: 4]);
+            6'd61: log_char = nibble_ascii(ad3[ 3: 0]);
+            6'd62: log_char = 8'h0D; // \r
+            6'd63: log_char = 8'h0A; // \n
+            default: log_char = 8'h00;
+        endcase
+    end
+endfunction
+
+// 1-second timer
+reg [26:0] sec_cnt;
+reg [31:0] log_ok;
+reg [31:0] log_ng;
+reg [31:0] log_amps_d1;
+reg [31:0] log_amps_d2;
+reg [31:0] log_amps_d3;
+reg        log_req;
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        sec_cnt     <= 27'd0;
+        log_ok      <= 32'd0;
+        log_ng      <= 32'd0;
+        log_amps_d1 <= 32'd0;
+        log_amps_d2 <= 32'd0;
+        log_amps_d3 <= 32'd0;
+        log_req     <= 1'b0;
+    end else begin
+        log_req <= 1'b0;
+        if (sec_cnt == SEC_COUNTS - 1) begin
+            sec_cnt     <= 27'd0;
+            log_ok      <= ok_cnt;
+            log_ng      <= ng_cnt;
+            log_amps_d1 <= last_amps_d1;
+            log_amps_d2 <= last_amps_d2;
+            log_amps_d3 <= last_amps_d3;
+            log_req     <= 1'b1;
+        end else begin
+            sec_cnt <= sec_cnt + 27'd1;
+        end
+    end
+end
+
+// UART print FSM (39 bytes)
+reg [5:0] log_ptr;
+reg       log_active;
+reg       uart_start;
+reg [7:0] uart_data;
+wire      uart_busy;
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        log_ptr    <= 5'd0;
+        log_active <= 1'b0;
+        uart_start <= 1'b0;
+        uart_data  <= 8'h00;
+    end else begin
+        uart_start <= 1'b0;
+
+        if (!log_active) begin
+            if (log_req) begin
+                log_ptr    <= 5'd0;
+                log_active <= 1'b1;
+            end
+        end else begin
+            if (!uart_busy && !uart_start) begin
+                uart_data  <= log_char(log_ptr, log_ok, log_ng, log_amps_d1, log_amps_d2, log_amps_d3);
+                uart_start <= 1'b1;
+                if (log_ptr == 6'd63)
+                    log_active <= 1'b0;
+                else
+                    log_ptr <= log_ptr + 6'd1;
+            end
+        end
+    end
+end
+
+//─────────────────────────────────────────────────────────────
+// 10. UART TX instance
+//─────────────────────────────────────────────────────────────
+uart_tx_simple #(
+    .CLKS_PER_BIT(CLKS_PER_BIT)
+) u_uart_tx (
+    .clk     (sys_clk),
+    .rst_n   (rst_n),
+    .start   (uart_start),
+    .data_in (uart_data),
+    .tx      (uart_tx),
+    .busy    (uart_busy)
+);
+
+//─────────────────────────────────────────────────────────────
+// 11. LEDs
+//─────────────────────────────────────────────────────────────
+assign led[0] = rst_n;
+assign led[1] = av_s2;           // data arriving
+assign led[2] = crc_pass_r;      // CRC pass blink
+assign led[3] = crc_fail_r;      // CRC fail blink
+
+endmodule

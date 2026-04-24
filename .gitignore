@@ -1,0 +1,17 @@
+.Xil/
+build/
+
+vivado.jou
+vivado.log
+vivado_*.backup.jou
+vivado_*.backup.log
+
+*.bit
+*.bin
+*.dcp
+*.pb
+*.rpx
+*.rpt
+*.str
+*.vdi
+*.Xil
