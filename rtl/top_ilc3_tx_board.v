@@ -236,8 +236,8 @@ ilc3_tx_core #(
 //    Gives RX 2-FF synchronizer reliable setup/hold margin despite
 //    independent 125 MHz oscillators on the two boards.
 //─────────────────────────────────────────────────────────────
-localparam integer HOLD_N = 20;  // 160 ns hold — >> 2-FF sync delay
-localparam integer GAP_N  = 4;   //  32 ns gap  — ensures clean falling edge
+localparam integer HOLD_N = 32;  // 256 ns hold for wider async capture margin
+localparam integer GAP_N  = 16;  // 128 ns gap to separate adjacent samples
 
 localparam [1:0] PH_IDLE = 2'd0, PH_HOLD = 2'd1, PH_GAP = 2'd2;
 
