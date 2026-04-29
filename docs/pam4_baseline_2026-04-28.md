@@ -107,6 +107,38 @@ At the end of this measurement, the TX board is loaded with the analog measureme
 - `SYMBOL_HOLD_CLKS=12500`
 - about 100 us/level
 
+## 2026-04-29 Slow-Mode Soak Check
+
+On 2026-04-29 KST, the same PAM4 slow-mode TX/RX pair was reloaded and run for about 2 hours while waiting for lower-value resistors.
+
+Observed RX UART tail:
+
+```text
+PAM4RX OK=06060DFE NG=00000000 C=2
+PAM4RX OK=0606350E NG=00000000 C=2
+PAM4RX OK=06065C1E NG=00000000 C=2
+PAM4RX OK=0606832E NG=00000000 C=2
+PAM4RX OK=0606AA3E NG=00000000 C=2
+PAM4RX OK=0606D14E NG=00000000 C=2
+PAM4RX OK=0606F85E NG=00000000 C=2
+PAM4RX OK=06071F6E NG=00000000 C=2
+PAM4RX OK=0607467E NG=00000000 C=2
+PAM4RX OK=06076D8E NG=00000000 C=2
+PAM4RX OK=0607949E NG=00000000 C=2
+PAM4RX OK=0607BBAE NG=00000000 C=2
+PAM4RX OK=0607E2BE NG=00000000 C=2
+PAM4RX OK=060809CE NG=00000000 C=2
+PAM4RX OK=060830DE NG=00000000 C=2
+PAM4RX OK=060857EE NG=00000000 C=2
+```
+
+Result:
+
+- Slow-mode PAM4 baseline ran for about 2 hours.
+- RX `OK` continued increasing.
+- RX `NG=00000000` stayed at zero.
+- This confirms the 2026-04-29 reloaded slow-mode PAM4 baseline remained stable.
+
 To return to the normal digital baseline speed, regenerate and reload TX with:
 
 ```powershell
