@@ -7,9 +7,10 @@
 module top_pam4_xadc_rx_board #(
     parameter integer CLK_FREQ_HZ = 125_000_000,
     parameter integer UART_BAUD   = 115_200,
-    parameter [11:0]  THRESH_01   = 12'd610,
-    parameter [11:0]  THRESH_12   = 12'd1826,
-    parameter [11:0]  THRESH_23   = 12'd3045
+    parameter integer STABLE_LEVEL_SAMPLES = 8,
+    parameter [11:0]  THRESH_01   = 12'h250,
+    parameter [11:0]  THRESH_12   = 12'h550,
+    parameter [11:0]  THRESH_23   = 12'h850
 )(
     input  wire       sys_clk,
     input  wire       rst_btn_n,
@@ -108,6 +109,12 @@ reg [11:0] raw_max;
 reg [1:0]  level;
 reg [31:0] sample_count;
 reg        window_reset;
+reg [1:0]  last_level;
+reg        have_level;
+reg [1:0]  candidate_level;
+reg [7:0]  candidate_count;
+reg [31:0] ok_count;
+reg [31:0] ng_count;
 
 function [1:0] level_from_raw;
     input [11:0] r;
@@ -124,6 +131,16 @@ function [1:0] level_from_raw;
     end
 endfunction
 
+function transition_is_adjacent;
+    input [1:0] prev_level;
+    input [1:0] next_level;
+    begin
+        transition_is_adjacent =
+            (next_level == (prev_level + 2'd1)) ||
+            (next_level == (prev_level - 2'd1));
+    end
+endfunction
+
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         raw12        <= 12'd0;
@@ -131,6 +148,12 @@ always @(posedge sys_clk or negedge rst_n) begin
         raw_max      <= 12'd0;
         level        <= 2'd0;
         sample_count <= 32'd0;
+        last_level   <= 2'd0;
+        have_level   <= 1'b0;
+        candidate_level <= 2'd0;
+        candidate_count <= 8'd0;
+        ok_count     <= 32'd0;
+        ng_count     <= 32'd0;
         led          <= 4'b0001;
     end else begin
         if (window_reset) begin
@@ -140,6 +163,30 @@ always @(posedge sys_clk or negedge rst_n) begin
             raw12        <= xadc_do[15:4];
             level        <= level_from_raw(xadc_do[15:4]);
             sample_count <= sample_count + 32'd1;
+
+            if (!have_level) begin
+                have_level <= 1'b1;
+                last_level <= level_from_raw(xadc_do[15:4]);
+                candidate_level <= level_from_raw(xadc_do[15:4]);
+                candidate_count <= 8'd1;
+            end else if (level_from_raw(xadc_do[15:4]) != candidate_level) begin
+                candidate_level <= level_from_raw(xadc_do[15:4]);
+                candidate_count <= 8'd1;
+            end else begin
+                if (candidate_count < STABLE_LEVEL_SAMPLES) begin
+                    candidate_count <= candidate_count + 8'd1;
+                end
+
+                if ((candidate_count >= STABLE_LEVEL_SAMPLES - 1) &&
+                    (candidate_level != last_level)) begin
+                    if (transition_is_adjacent(last_level, candidate_level)) begin
+                        ok_count <= ok_count + 32'd1;
+                    end else begin
+                        ng_count <= ng_count + 32'd1;
+                    end
+                    last_level <= candidate_level;
+                end
+            end
 
             if (xadc_do[15:4] < raw_min) begin
                 raw_min <= xadc_do[15:4];
@@ -161,6 +208,8 @@ reg [11:0] log_min;
 reg [11:0] log_max;
 reg [1:0]  log_level;
 reg [31:0] log_samples;
+reg [31:0] log_ok;
+reg [31:0] log_ng;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -171,6 +220,8 @@ always @(posedge sys_clk or negedge rst_n) begin
         log_max     <= 12'd0;
         log_level   <= 2'd0;
         log_samples <= 32'd0;
+        log_ok      <= 32'd0;
+        log_ng      <= 32'd0;
         window_reset <= 1'b0;
     end else if (log_clear) begin
         window_reset <= 1'b0;
@@ -186,6 +237,8 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_max     <= raw_max;
             log_level   <= level;
             log_samples <= sample_count;
+            log_ok      <= ok_count;
+            log_ng      <= ng_count;
             window_reset <= 1'b1;
         end else begin
             log_timer <= log_timer + 32'd1;
@@ -202,89 +255,115 @@ function [7:0] hex4;
 endfunction
 
 function [7:0] log_char;
-    input [5:0]  idx;
+    input [6:0]  idx;
     input [11:0] raw;
     input [1:0]  lev;
     input [11:0] mn;
     input [11:0] mx;
+    input [31:0] ok;
+    input [31:0] ng;
     input [31:0] smp;
     begin
         case (idx)
-            6'd0:  log_char = "X";
-            6'd1:  log_char = "A";
-            6'd2:  log_char = "D";
-            6'd3:  log_char = "C";
-            6'd4:  log_char = " ";
-            6'd5:  log_char = "R";
-            6'd6:  log_char = "A";
-            6'd7:  log_char = "W";
-            6'd8:  log_char = "=";
-            6'd9:  log_char = hex4(raw[11:8]);
-            6'd10: log_char = hex4(raw[7:4]);
-            6'd11: log_char = hex4(raw[3:0]);
-            6'd12: log_char = " ";
-            6'd13: log_char = "L";
-            6'd14: log_char = "V";
-            6'd15: log_char = "=";
-            6'd16: log_char = 8'h30 + {6'd0, lev};
-            6'd17: log_char = " ";
-            6'd18: log_char = "M";
-            6'd19: log_char = "I";
-            6'd20: log_char = "N";
-            6'd21: log_char = "=";
-            6'd22: log_char = hex4(mn[11:8]);
-            6'd23: log_char = hex4(mn[7:4]);
-            6'd24: log_char = hex4(mn[3:0]);
-            6'd25: log_char = " ";
-            6'd26: log_char = "M";
-            6'd27: log_char = "A";
-            6'd28: log_char = "X";
-            6'd29: log_char = "=";
-            6'd30: log_char = hex4(mx[11:8]);
-            6'd31: log_char = hex4(mx[7:4]);
-            6'd32: log_char = hex4(mx[3:0]);
-            6'd33: log_char = " ";
-            6'd34: log_char = "N";
-            6'd35: log_char = "=";
-            6'd36: log_char = hex4(smp[31:28]);
-            6'd37: log_char = hex4(smp[27:24]);
-            6'd38: log_char = hex4(smp[23:20]);
-            6'd39: log_char = hex4(smp[19:16]);
-            6'd40: log_char = hex4(smp[15:12]);
-            6'd41: log_char = hex4(smp[11:8]);
-            6'd42: log_char = hex4(smp[7:4]);
-            6'd43: log_char = hex4(smp[3:0]);
-            6'd44: log_char = 8'h0D;
-            6'd45: log_char = 8'h0A;
+            7'd0:  log_char = "X";
+            7'd1:  log_char = "A";
+            7'd2:  log_char = "D";
+            7'd3:  log_char = "C";
+            7'd4:  log_char = " ";
+            7'd5:  log_char = "R";
+            7'd6:  log_char = "A";
+            7'd7:  log_char = "W";
+            7'd8:  log_char = "=";
+            7'd9:  log_char = hex4(raw[11:8]);
+            7'd10: log_char = hex4(raw[7:4]);
+            7'd11: log_char = hex4(raw[3:0]);
+            7'd12: log_char = " ";
+            7'd13: log_char = "L";
+            7'd14: log_char = "V";
+            7'd15: log_char = "=";
+            7'd16: log_char = 8'h30 + {6'd0, lev};
+            7'd17: log_char = " ";
+            7'd18: log_char = "M";
+            7'd19: log_char = "I";
+            7'd20: log_char = "N";
+            7'd21: log_char = "=";
+            7'd22: log_char = hex4(mn[11:8]);
+            7'd23: log_char = hex4(mn[7:4]);
+            7'd24: log_char = hex4(mn[3:0]);
+            7'd25: log_char = " ";
+            7'd26: log_char = "M";
+            7'd27: log_char = "A";
+            7'd28: log_char = "X";
+            7'd29: log_char = "=";
+            7'd30: log_char = hex4(mx[11:8]);
+            7'd31: log_char = hex4(mx[7:4]);
+            7'd32: log_char = hex4(mx[3:0]);
+            7'd33: log_char = " ";
+            7'd34: log_char = "O";
+            7'd35: log_char = "K";
+            7'd36: log_char = "=";
+            7'd37: log_char = hex4(ok[31:28]);
+            7'd38: log_char = hex4(ok[27:24]);
+            7'd39: log_char = hex4(ok[23:20]);
+            7'd40: log_char = hex4(ok[19:16]);
+            7'd41: log_char = hex4(ok[15:12]);
+            7'd42: log_char = hex4(ok[11:8]);
+            7'd43: log_char = hex4(ok[7:4]);
+            7'd44: log_char = hex4(ok[3:0]);
+            7'd45: log_char = " ";
+            7'd46: log_char = "N";
+            7'd47: log_char = "G";
+            7'd48: log_char = "=";
+            7'd49: log_char = hex4(ng[31:28]);
+            7'd50: log_char = hex4(ng[27:24]);
+            7'd51: log_char = hex4(ng[23:20]);
+            7'd52: log_char = hex4(ng[19:16]);
+            7'd53: log_char = hex4(ng[15:12]);
+            7'd54: log_char = hex4(ng[11:8]);
+            7'd55: log_char = hex4(ng[7:4]);
+            7'd56: log_char = hex4(ng[3:0]);
+            7'd57: log_char = " ";
+            7'd58: log_char = "N";
+            7'd59: log_char = "=";
+            7'd60: log_char = hex4(smp[31:28]);
+            7'd61: log_char = hex4(smp[27:24]);
+            7'd62: log_char = hex4(smp[23:20]);
+            7'd63: log_char = hex4(smp[19:16]);
+            7'd64: log_char = hex4(smp[15:12]);
+            7'd65: log_char = hex4(smp[11:8]);
+            7'd66: log_char = hex4(smp[7:4]);
+            7'd67: log_char = hex4(smp[3:0]);
+            7'd68: log_char = 8'h0D;
+            7'd69: log_char = 8'h0A;
             default: log_char = 8'h20;
         endcase
     end
 endfunction
 
-localparam [5:0] LOG_LEN = 6'd46;
+localparam [6:0] LOG_LEN = 7'd70;
 
 reg        uart_start;
 reg [7:0]  uart_data;
 wire       uart_busy;
-reg [5:0]  log_ptr;
+reg [6:0]  log_ptr;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         uart_start <= 1'b0;
         log_clear   <= 1'b0;
         uart_data  <= 8'h00;
-        log_ptr    <= 6'd0;
+        log_ptr    <= 7'd0;
     end else begin
         uart_start <= 1'b0;
         log_clear   <= 1'b0;
         if (log_pending && !uart_busy && !uart_start) begin
-            uart_data  <= log_char(log_ptr, log_raw, log_level, log_min, log_max, log_samples);
+            uart_data  <= log_char(log_ptr, log_raw, log_level, log_min, log_max, log_ok, log_ng, log_samples);
             uart_start <= 1'b1;
             if (log_ptr == LOG_LEN - 1) begin
-                log_ptr   <= 6'd0;
+                log_ptr   <= 7'd0;
                 log_clear <= 1'b1;
             end else begin
-                log_ptr <= log_ptr + 6'd1;
+                log_ptr <= log_ptr + 7'd1;
             end
         end
     end
