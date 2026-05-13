@@ -170,6 +170,9 @@ reg [47:0] next_hist;
 reg [4:0]  next_hist_count;
 reg [4:0]  match_count;
 reg [3:0]  found_phase;
+reg [2:0]  sample_expected_class;
+reg        sync_pending;
+reg        sync_sample_now;
 integer    phase_i;
 
 wire [2:0] current_rx_class = rx_class(cmp_s2);
@@ -221,16 +224,23 @@ always @(posedge sys_clk or negedge rst_n) begin
         last_exp_class <= 3'd0;
         pass_pulse     <= 1'b0;
         fail_pulse     <= 1'b0;
+        sync_pending   <= 1'b0;
     end else begin
         pass_pulse <= 1'b0;
         fail_pulse <= 1'b0;
 
-        if (sync_rise)
+        if (sync_rise) begin
             frame_sync_cnt <= frame_sync_cnt + 32'd1;
+            sync_pending   <= 1'b1;
+        end
 
         if (sample_rise) begin
+            sync_sample_now = sync_pending || sync_rise;
+            sample_expected_class = sync_sample_now ? accuracy_pattern_class(4'd0) : expected_class;
+            sync_pending <= 1'b0;
+
             last_rx_class  <= current_rx_class;
-            last_exp_class <= expected_class;
+            last_exp_class <= sample_expected_class;
 
             if (!therm_valid(cmp_s2)) begin
                 invalid_cnt <= invalid_cnt + 32'd1;
@@ -239,7 +249,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 locked      <= 1'b0;
                 hist_count  <= 5'd0;
             end else if (locked) begin
-                if (current_rx_class == expected_class) begin
+                if (current_rx_class == sample_expected_class) begin
                     ok_cnt     <= ok_cnt + 32'd1;
                     pass_pulse <= 1'b1;
                 end else begin
@@ -247,7 +257,18 @@ always @(posedge sys_clk or negedge rst_n) begin
                     qn_cnt      <= qn_cnt + 32'd1;
                     fail_pulse  <= 1'b1;
                 end
-                advance_expected();
+                pattern_phase <= sync_sample_now ? 4'd1 : (pattern_phase + 4'd1);
+            end else if (sync_sample_now) begin
+                locked <= 1'b1;
+                if (current_rx_class == accuracy_pattern_class(4'd0)) begin
+                    ok_cnt     <= ok_cnt + 32'd1;
+                    pass_pulse <= 1'b1;
+                end else begin
+                    sym_err_cnt <= sym_err_cnt + 32'd1;
+                    qn_cnt      <= qn_cnt + 32'd1;
+                    fail_pulse  <= 1'b1;
+                end
+                pattern_phase <= 4'd1;
             end else begin
                 update_lock_history(current_rx_class);
             end

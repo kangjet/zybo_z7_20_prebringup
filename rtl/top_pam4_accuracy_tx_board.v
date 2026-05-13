@@ -20,8 +20,8 @@ module top_pam4_accuracy_tx_board #(
     parameter integer CLK_FREQ_HZ        = 125_000_000,
     parameter integer UART_BAUD          = 115_200,
     parameter integer SYMBOL_HOLD_CLKS   = 125,
-    parameter integer STROBE_OFFSET_CLKS = 62,
-    parameter integer STROBE_PULSE_CLKS  = 16
+    parameter integer STROBE_OFFSET_CLKS = 100,
+    parameter integer STROBE_PULSE_CLKS  = 4
 ) (
     input  wire       sys_clk,
     input  wire       rst_btn_n,
