@@ -14,6 +14,7 @@ create_project $PROJ_NAME $PROJ_DIR -part $PART -force
 
 add_files -norecurse [list \
     $RTL_DIR/top_ilc3_accuracy_rx_board.v \
+    $RTL_DIR/ilc3_core/ilc3_rx_core.v \
     $RTL_DIR/uart_tx_simple.v \
 ]
 

@@ -2,10 +2,10 @@
 //=============================================================
 // top_ilc3_accuracy_tx_board.v
 //
-// ILC3 accuracy-test TX for the PAM4-comparison analog path.
-// It preserves the same resistor-DAC symbol mapping used by the
-// analog comparison TX, but changes JD7 into a true 1-clock sample
-// strobe and JD8 into a true frame-start strobe.
+// ILC3 algorithm-test TX for the PAM4-comparison analog path.
+// It sends the real ILC3 2-sample codebook over the resistor-DAC
+// analog path, with JD7 as the per-sample strobe and JD8 as the
+// first sample of each frame.
 //
 // Mapping to resistor-DAC code:
 //   -1 -> 2'b00  low
@@ -14,8 +14,8 @@
 //
 // PMOD JD:
 //   JD1/JD2 = pam4_code[0]/pam4_code[1]
-//   JD7     = sample_strobe, one sys_clk pulse per ternary sample
-//   JD8     = frame_sync, one sys_clk pulse on the first sample of AA
+//   JD7     = sample_strobe, one sys_clk pulse per ILC3 amplitude sample
+//   JD8     = frame_sync, one pulse at the start of each frame
 //=============================================================
 module top_ilc3_accuracy_tx_board #(
     parameter integer CLK_FREQ_HZ      = 125_000_000,
@@ -67,6 +67,8 @@ reg [31:0] hold_cnt;
 reg [31:0] sample_cnt;
 reg [31:0] frame_cnt;
 reg [3:0]  pattern_phase;
+reg [31:0] tx_sample_dbg;
+reg [3:0]  tx_dbg_count;
 
 wire [7:0] cw0 = crc8_byte(8'h00, 8'h08);
 wire [7:0] cw1 = crc8_byte(cw0,   cur_seq[31:24]);
@@ -96,15 +98,31 @@ always @(*) begin
     endcase
 end
 
-reg [1:0] cur_sym;
-always @(*) begin
-    case (sym_cnt)
-        2'd0: cur_sym = frame_byte[7:6];
-        2'd1: cur_sym = frame_byte[5:4];
-        2'd2: cur_sym = frame_byte[3:2];
-        default: cur_sym = frame_byte[1:0];
-    endcase
-end
+function [1:0] alg_pattern_sym;
+    input [3:0] phase;
+    begin
+        case (phase)
+            4'd0:  alg_pattern_sym = 2'd0;
+            4'd1:  alg_pattern_sym = 2'd1;
+            4'd2:  alg_pattern_sym = 2'd2;
+            4'd3:  alg_pattern_sym = 2'd3;
+            4'd4:  alg_pattern_sym = 2'd3;
+            4'd5:  alg_pattern_sym = 2'd2;
+            4'd6:  alg_pattern_sym = 2'd1;
+            4'd7:  alg_pattern_sym = 2'd0;
+            4'd8:  alg_pattern_sym = 2'd0;
+            4'd9:  alg_pattern_sym = 2'd2;
+            4'd10: alg_pattern_sym = 2'd1;
+            4'd11: alg_pattern_sym = 2'd3;
+            4'd12: alg_pattern_sym = 2'd1;
+            4'd13: alg_pattern_sym = 2'd0;
+            4'd14: alg_pattern_sym = 2'd3;
+            default: alg_pattern_sym = 2'd2;
+        endcase
+    end
+endfunction
+
+wire [1:0] cur_sym = alg_pattern_sym(pattern_phase);
 
 reg signed [1:0] amp_sample;
 always @(*) begin
@@ -124,6 +142,18 @@ function [1:0] code_from_amp;
              2'sd0: code_from_amp = 2'b01;
              2'sd1: code_from_amp = 2'b10;
             default: code_from_amp = 2'b00;
+        endcase
+    end
+endfunction
+
+function [3:0] nibble_from_amp;
+    input signed [1:0] amp;
+    begin
+        case (amp)
+            -2'sd1: nibble_from_amp = 4'hF;
+             2'sd0: nibble_from_amp = 4'h0;
+             2'sd1: nibble_from_amp = 4'h1;
+            default: nibble_from_amp = 4'h0;
         endcase
     end
 endfunction
@@ -173,39 +203,42 @@ always @(posedge sys_clk or negedge rst_n) begin
         sample_idx <= 1'b0;
         hold_cnt   <= 32'd0;
         sample_cnt <= 32'd0;
-        frame_cnt  <= 32'd0;
-        pattern_phase <= 4'd0;
-        pam4_code  <= 2'b00;
+            frame_cnt  <= 32'd0;
+            pattern_phase <= 4'd0;
+            tx_sample_dbg <= 32'd0;
+            tx_dbg_count  <= 4'd0;
+            pam4_code  <= 2'b00;
         pam4_valid <= 1'b0;
         pam4_sync  <= 1'b0;
     end else begin
-        pam4_code  <= code_from_class(accuracy_pattern_class(pattern_phase));
+        pam4_code  <= code_from_amp(amp_sample);
         pam4_valid <= (hold_cnt >= STROBE_OFFSET_CLKS) &&
                       (hold_cnt < STROBE_OFFSET_CLKS + STROBE_PULSE_CLKS);
-        pam4_sync  <= (hold_cnt >= STROBE_OFFSET_CLKS) &&
-                      (hold_cnt < STROBE_OFFSET_CLKS + STROBE_PULSE_CLKS) &&
-                      (pattern_phase == 4'd0);
+        pam4_sync  <= (hold_cnt < STROBE_PULSE_CLKS) &&
+                      (pattern_phase == 4'd0) && !sample_idx;
 
-        if (hold_cnt == STROBE_OFFSET_CLKS)
+        if (hold_cnt == STROBE_OFFSET_CLKS) begin
             sample_cnt <= sample_cnt + 32'd1;
+            if ((pattern_phase == 4'd0) && !sample_idx) begin
+                tx_sample_dbg <= {28'd0, nibble_from_amp(amp_sample)};
+                tx_dbg_count  <= 4'd1;
+            end else if (tx_dbg_count < 4'd8) begin
+                tx_sample_dbg <= {tx_sample_dbg[27:0], nibble_from_amp(amp_sample)};
+                tx_dbg_count  <= tx_dbg_count + 4'd1;
+            end
+        end
 
         if (hold_cnt == SYMBOL_HOLD_CLKS - 1) begin
             hold_cnt <= 32'd0;
-            pattern_phase <= pattern_phase + 4'd1;
             if (sample_idx) begin
                 sample_idx <= 1'b0;
-                if (sym_cnt == 2'd3) begin
-                    sym_cnt <= 2'd0;
-                    if (byte_cnt == 4'd11) begin
-                        byte_cnt  <= 4'd0;
-                        pkt_seq   <= pkt_seq + 32'd1;
-                        cur_seq   <= pkt_seq + 32'd1;
-                        frame_cnt <= frame_cnt + 32'd1;
-                    end else begin
-                        byte_cnt <= byte_cnt + 4'd1;
-                    end
+                if (pattern_phase == 4'd15) begin
+                    pattern_phase <= 4'd0;
+                    pkt_seq   <= pkt_seq + 32'd1;
+                    cur_seq   <= pkt_seq + 32'd1;
+                    frame_cnt <= frame_cnt + 32'd1;
                 end else begin
-                    sym_cnt <= sym_cnt + 2'd1;
+                    pattern_phase <= pattern_phase + 4'd1;
                 end
             end else begin
                 sample_idx <= 1'b1;
@@ -223,12 +256,13 @@ function [7:0] nibble_ascii;
     end
 endfunction
 
-// "ILC3ATX FR=XXXXXXXX SA=XXXXXXXX C=X\r\n"
+// "ILC3ATX FR=XXXXXXXX SA=XXXXXXXX C=X DP=XXXXXXXX\r\n"
 function [7:0] log_char;
     input [5:0] ptr;
     input [31:0] fr;
     input [31:0] sa;
     input [1:0] code;
+    input [31:0] dbg;
     begin
         case (ptr)
             6'd0:  log_char = "I";
@@ -266,8 +300,20 @@ function [7:0] log_char;
             6'd32: log_char = "C";
             6'd33: log_char = "=";
             6'd34: log_char = nibble_ascii({2'b00, code});
-            6'd35: log_char = 8'h0D;
-            6'd36: log_char = 8'h0A;
+            6'd35: log_char = " ";
+            6'd36: log_char = "D";
+            6'd37: log_char = "P";
+            6'd38: log_char = "=";
+            6'd39: log_char = nibble_ascii(dbg[31:28]);
+            6'd40: log_char = nibble_ascii(dbg[27:24]);
+            6'd41: log_char = nibble_ascii(dbg[23:20]);
+            6'd42: log_char = nibble_ascii(dbg[19:16]);
+            6'd43: log_char = nibble_ascii(dbg[15:12]);
+            6'd44: log_char = nibble_ascii(dbg[11: 8]);
+            6'd45: log_char = nibble_ascii(dbg[ 7: 4]);
+            6'd46: log_char = nibble_ascii(dbg[ 3: 0]);
+            6'd47: log_char = 8'h0D;
+            6'd48: log_char = 8'h0A;
             default: log_char = 8'h00;
         endcase
     end
@@ -276,6 +322,7 @@ endfunction
 reg [26:0] sec_cnt;
 reg [31:0] log_frame_cnt;
 reg [31:0] log_sample_cnt;
+reg [31:0] log_dbg;
 reg [1:0]  log_code;
 reg        log_req;
 
@@ -284,6 +331,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         sec_cnt        <= 27'd0;
         log_frame_cnt  <= 32'd0;
         log_sample_cnt <= 32'd0;
+        log_dbg        <= 32'd0;
         log_code       <= 2'd0;
         log_req        <= 1'b0;
     end else begin
@@ -292,6 +340,7 @@ always @(posedge sys_clk or negedge rst_n) begin
             sec_cnt        <= 27'd0;
             log_frame_cnt  <= frame_cnt;
             log_sample_cnt <= sample_cnt;
+            log_dbg        <= tx_sample_dbg;
             log_code       <= pam4_code;
             log_req        <= 1'b1;
         end else begin
@@ -320,9 +369,9 @@ always @(posedge sys_clk or negedge rst_n) begin
                 log_active <= 1'b1;
             end
         end else if (!uart_busy && !uart_start) begin
-            uart_data  <= log_char(log_ptr, log_frame_cnt, log_sample_cnt, log_code);
+            uart_data  <= log_char(log_ptr, log_frame_cnt, log_sample_cnt, log_code, log_dbg);
             uart_start <= 1'b1;
-            if (log_ptr == 6'd36)
+            if (log_ptr == 6'd48)
                 log_active <= 1'b0;
             else
                 log_ptr <= log_ptr + 6'd1;

@@ -51,9 +51,21 @@ module ilc3_rx_core #(
         end
     endfunction
 
+    function [3:0] norm_nibble;
+        input [AMP_WIDTH-1:0] raw_amp;
+        begin
+            case (raw_amp)
+                4'hF: norm_nibble = 4'hF;
+                4'h0: norm_nibble = 4'h0;
+                4'h1: norm_nibble = 4'h1;
+                default: norm_nibble = 4'h0;
+            endcase
+        end
+    endfunction
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sample_phase      <= 1'b1;
+            sample_phase      <= 1'b0;
             s0                <= {AMP_WIDTH{1'b0}};
             amp_norm          <= {AMP_WIDTH{1'b0}};
             t0                <= {AMP_WIDTH{1'b0}};
@@ -67,7 +79,7 @@ module ilc3_rx_core #(
             sym_out_valid <= 1'b0;
 
             if (frame_sync) begin
-                sample_phase <= 1'b1;
+                sample_phase <= 1'b0;
                 pair_valid   <= 1'b0;
                 dbg_pairs    <= 32'd0;
                 dbg_pair_cnt <= 4'd0;
@@ -75,6 +87,10 @@ module ilc3_rx_core #(
 
             if (amp_in_valid && amp_in_ready) begin
                 amp_norm <= norm_amp(amp_in);
+                if (dbg_pair_cnt < 4'd8) begin
+                    dbg_pairs    <= {dbg_pairs[27:0], norm_nibble(amp_in)};
+                    dbg_pair_cnt <= dbg_pair_cnt + 4'd1;
+                end
                 if (!sample_phase) begin
                     s0           <= norm_amp(amp_in);
                     sample_phase <= 1'b1;
@@ -87,20 +103,14 @@ module ilc3_rx_core #(
             end
 
             if (pair_valid && sym_out_ready) begin
-                if (dbg_pair_cnt < 4'd8) begin
-                    if (dbg_pair_cnt >= 4'd4)
-                        dbg_pairs <= {dbg_pairs[23:0], t0[3:0], t1[3:0]};
-                    dbg_pair_cnt <= dbg_pair_cnt + 4'd1;
-                end
                 case ({t0, t1})
-                    {4'hF, 4'h0}: sym_cand = 2'd0; // [-1, 0]
-                    {4'h0, 4'hF}: sym_cand = 2'd1; // [ 0,-1]
-                    {4'h1, 4'h0}: sym_cand = 2'd2; // [ 1, 0]
-                    {4'h0, 4'h1}: sym_cand = 2'd3; // [ 0, 1]
-                    default:      sym_cand = 2'd0;
+                    {4'hF, 4'h0}: begin sym_cand = 2'd0; sym_out_valid <= 1'b1; end // [-1, 0]
+                    {4'h0, 4'hF}: begin sym_cand = 2'd1; sym_out_valid <= 1'b1; end // [ 0,-1]
+                    {4'h1, 4'h0}: begin sym_cand = 2'd2; sym_out_valid <= 1'b1; end // [ 1, 0]
+                    {4'h0, 4'h1}: begin sym_cand = 2'd3; sym_out_valid <= 1'b1; end // [ 0, 1]
+                    default:      begin sym_cand = 2'd0; sym_out_valid <= 1'b0; end
                 endcase
                 sym_out       <= sym_cand;
-                sym_out_valid <= 1'b1;
                 pair_valid    <= 1'b0;
             end
         end
