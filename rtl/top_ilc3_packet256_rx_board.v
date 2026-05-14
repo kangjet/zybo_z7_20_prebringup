@@ -190,6 +190,9 @@ reg [31:0] byte_err_cnt;
 reg [31:0] crc_err_cnt;
 reg [31:0] invalid_cnt;
 reg [31:0] frame_sync_cnt;
+reg [31:0] resync_drop_cnt;
+reg [31:0] partial_drop_cnt;
+reg [31:0] pkt_byte_err;
 reg [7:0]  last_byte;
 reg        pass_pulse;
 reg        fail_pulse;
@@ -220,6 +223,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         crc_err_cnt <= 32'd0;
         invalid_cnt <= 32'd0;
         frame_sync_cnt <= 32'd0;
+        resync_drop_cnt <= 32'd0;
+        partial_drop_cnt <= 32'd0;
+        pkt_byte_err <= 32'd0;
         last_byte <= 8'd0;
         pass_pulse <= 1'b0;
         fail_pulse <= 1'b0;
@@ -229,6 +235,10 @@ always @(posedge sys_clk or negedge rst_n) begin
 
         if (sync_rise) begin
             frame_sync_cnt <= frame_sync_cnt + 32'd1;
+            if (!need_resync && ((byte_idx != 9'd0) || (sym_in_byte != 2'd0) || packet_bad || (pkt_byte_err != 32'd0))) begin
+                resync_drop_cnt <= resync_drop_cnt + 32'd1;
+                partial_drop_cnt <= partial_drop_cnt + 32'd1;
+            end
             need_resync <= 1'b1;
         end
 
@@ -249,6 +259,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rx_crc <= 16'd0;
                 packet_bad <= 1'b0;
                 crc_bad <= 1'b0;
+                pkt_byte_err <= 32'd0;
             end else begin
                 sym_in_byte_acc <= {sym_in_byte_acc[3:0], sym_out_w};
                 if (sym_in_byte == 2'd3) begin
@@ -274,7 +285,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                     if (byte_idx < FRAME_BYTES - CRC_LEN) begin
                         exp_byte = expected_byte_no_crc(byte_idx, seq_next);
                         if (rx_byte != exp_byte) begin
-                            byte_err_cnt <= byte_err_cnt + 32'd1;
+                            pkt_byte_err <= pkt_byte_err + 32'd1;
                             packet_bad_next = 1'b1;
                             fail_pulse <= 1'b1;
                         end
@@ -294,6 +305,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                         pkt_cnt <= pkt_cnt + 32'd1;
                         if (packet_bad_next) begin
                             pkt_ng_cnt <= pkt_ng_cnt + 32'd1;
+                            byte_err_cnt <= byte_err_cnt + pkt_byte_err;
                         end else begin
                             pkt_ok_cnt <= pkt_ok_cnt + 32'd1;
                             pass_pulse <= 1'b1;
@@ -303,6 +315,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                         rx_crc <= 16'd0;
                         packet_bad <= 1'b0;
                         crc_bad <= crc_bad_next;
+                        pkt_byte_err <= 32'd0;
                     end else begin
                         byte_idx <= byte_idx + 9'd1;
                         crc_acc <= crc_next;
@@ -328,7 +341,7 @@ function [7:0] nibble_ascii;
     end
 endfunction
 
-// "ILC3PKT SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX WI=XXXXXXXX FS=XXXXXXXX LB=XX\r\n"
+// "ILC3PKT SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX WI=XXXXXXXX FS=XXXXXXXX RS=XXXXXXXX DR=XXXXXXXX LB=XX\r\n"
 function [7:0] log_char;
     input [7:0] ptr;
     input [31:0] pk;
@@ -338,6 +351,8 @@ function [7:0] log_char;
     input [31:0] ce;
     input [31:0] wi;
     input [31:0] fs;
+    input [31:0] rs;
+    input [31:0] dr;
     input [7:0]  lb;
     begin
         case (ptr)
@@ -350,27 +365,29 @@ function [7:0] log_char;
             8'd64: log_char="C"; 8'd65: log_char="E"; 8'd66: log_char="="; 8'd67: log_char=nibble_ascii(ce[31:28]); 8'd68: log_char=nibble_ascii(ce[27:24]); 8'd69: log_char=nibble_ascii(ce[23:20]); 8'd70: log_char=nibble_ascii(ce[19:16]); 8'd71: log_char=nibble_ascii(ce[15:12]); 8'd72: log_char=nibble_ascii(ce[11:8]); 8'd73: log_char=nibble_ascii(ce[7:4]); 8'd74: log_char=nibble_ascii(ce[3:0]); 8'd75: log_char=" ";
             8'd76: log_char="W"; 8'd77: log_char="I"; 8'd78: log_char="="; 8'd79: log_char=nibble_ascii(wi[31:28]); 8'd80: log_char=nibble_ascii(wi[27:24]); 8'd81: log_char=nibble_ascii(wi[23:20]); 8'd82: log_char=nibble_ascii(wi[19:16]); 8'd83: log_char=nibble_ascii(wi[15:12]); 8'd84: log_char=nibble_ascii(wi[11:8]); 8'd85: log_char=nibble_ascii(wi[7:4]); 8'd86: log_char=nibble_ascii(wi[3:0]); 8'd87: log_char=" ";
             8'd88: log_char="F"; 8'd89: log_char="S"; 8'd90: log_char="="; 8'd91: log_char=nibble_ascii(fs[31:28]); 8'd92: log_char=nibble_ascii(fs[27:24]); 8'd93: log_char=nibble_ascii(fs[23:20]); 8'd94: log_char=nibble_ascii(fs[19:16]); 8'd95: log_char=nibble_ascii(fs[15:12]); 8'd96: log_char=nibble_ascii(fs[11:8]); 8'd97: log_char=nibble_ascii(fs[7:4]); 8'd98: log_char=nibble_ascii(fs[3:0]); 8'd99: log_char=" ";
-            8'd100: log_char="L"; 8'd101: log_char="B"; 8'd102: log_char="="; 8'd103: log_char=nibble_ascii(lb[7:4]); 8'd104: log_char=nibble_ascii(lb[3:0]); 8'd105: log_char=8'h0D; 8'd106: log_char=8'h0A;
+            8'd100: log_char="R"; 8'd101: log_char="S"; 8'd102: log_char="="; 8'd103: log_char=nibble_ascii(rs[31:28]); 8'd104: log_char=nibble_ascii(rs[27:24]); 8'd105: log_char=nibble_ascii(rs[23:20]); 8'd106: log_char=nibble_ascii(rs[19:16]); 8'd107: log_char=nibble_ascii(rs[15:12]); 8'd108: log_char=nibble_ascii(rs[11:8]); 8'd109: log_char=nibble_ascii(rs[7:4]); 8'd110: log_char=nibble_ascii(rs[3:0]); 8'd111: log_char=" ";
+            8'd112: log_char="D"; 8'd113: log_char="R"; 8'd114: log_char="="; 8'd115: log_char=nibble_ascii(dr[31:28]); 8'd116: log_char=nibble_ascii(dr[27:24]); 8'd117: log_char=nibble_ascii(dr[23:20]); 8'd118: log_char=nibble_ascii(dr[19:16]); 8'd119: log_char=nibble_ascii(dr[15:12]); 8'd120: log_char=nibble_ascii(dr[11:8]); 8'd121: log_char=nibble_ascii(dr[7:4]); 8'd122: log_char=nibble_ascii(dr[3:0]); 8'd123: log_char=" ";
+            8'd124: log_char="L"; 8'd125: log_char="B"; 8'd126: log_char="="; 8'd127: log_char=nibble_ascii(lb[7:4]); 8'd128: log_char=nibble_ascii(lb[3:0]); 8'd129: log_char=8'h0D; 8'd130: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
 endfunction
 
 reg [26:0] sec_cnt;
-reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs;
+reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr;
 reg [7:0]  log_lb;
 reg        log_req;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         sec_cnt <= 27'd0; log_req <= 1'b0;
-        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_lb <= 8'd0;
+        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_rs <= 32'd0; log_dr <= 32'd0; log_lb <= 8'd0;
     end else begin
         log_req <= 1'b0;
         if (sec_cnt == SEC_COUNTS - 1) begin
             sec_cnt <= 27'd0;
             log_pk <= pkt_cnt; log_ok <= pkt_ok_cnt; log_ng <= pkt_ng_cnt; log_be <= byte_err_cnt;
-            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_lb <= last_byte;
+            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= resync_drop_cnt; log_dr <= partial_drop_cnt; log_lb <= last_byte;
             log_req <= 1'b1;
         end else begin
             sec_cnt <= sec_cnt + 27'd1;
@@ -391,10 +408,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         uart_start <= 1'b0;
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 8'd0;
-        end else if (log_active && !uart_busy) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_lb);
+        end else if (log_active && !uart_busy && !uart_start) begin
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_lb);
             uart_start <= 1'b1;
-            if (log_ptr == 8'd106) log_active <= 1'b0;
+            if (log_ptr == 8'd130) log_active <= 1'b0;
             else log_ptr <= log_ptr + 8'd1;
         end
     end

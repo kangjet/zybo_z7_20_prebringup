@@ -293,7 +293,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         uart_start <= 1'b0;
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 6'd0;
-        end else if (log_active && !uart_busy) begin
+        end else if (log_active && !uart_busy && !uart_start) begin
             uart_data <= log_char(log_ptr, log_pkt_cnt, log_sample_cnt, log_dbg);
             uart_start <= 1'b1;
             if (log_ptr == 6'd44) log_active <= 1'b0;
