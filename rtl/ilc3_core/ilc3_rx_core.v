@@ -25,7 +25,10 @@ module ilc3_rx_core #(
     output reg  [SYMB_WIDTH-1:0]       sym_out,
     output reg                         sym_out_valid,
     input  wire                        sym_out_ready,
-    output reg  [31:0]                 dbg_pairs
+    output reg  [31:0]                 dbg_pairs,
+    output reg                         pair_invalid_pulse,
+    output reg  [7:0]                  pair_invalid_code,
+    output reg                         sample_phase_dbg
 );
 
     assign amp_in_ready = 1'b1;
@@ -75,8 +78,13 @@ module ilc3_rx_core #(
             sym_out_valid     <= 1'b0;
             dbg_pairs         <= 32'd0;
             dbg_pair_cnt      <= 4'd0;
+            pair_invalid_pulse <= 1'b0;
+            pair_invalid_code  <= 8'h00;
+            sample_phase_dbg   <= 1'b0;
         end else begin
             sym_out_valid <= 1'b0;
+            pair_invalid_pulse <= 1'b0;
+            sample_phase_dbg <= sample_phase;
 
             if (frame_sync) begin
                 sample_phase <= 1'b0;
@@ -108,7 +116,7 @@ module ilc3_rx_core #(
                     {4'h0, 4'hF}: begin sym_cand = 2'd1; sym_out_valid <= 1'b1; end // [ 0,-1]
                     {4'h1, 4'h0}: begin sym_cand = 2'd2; sym_out_valid <= 1'b1; end // [ 1, 0]
                     {4'h0, 4'h1}: begin sym_cand = 2'd3; sym_out_valid <= 1'b1; end // [ 0, 1]
-                    default:      begin sym_cand = 2'd0; sym_out_valid <= 1'b0; end
+                    default:      begin sym_cand = 2'd0; sym_out_valid <= 1'b0; pair_invalid_pulse <= 1'b1; pair_invalid_code <= {norm_nibble(t0), norm_nibble(t1)}; end
                 endcase
                 sym_out       <= sym_cand;
                 pair_valid    <= 1'b0;

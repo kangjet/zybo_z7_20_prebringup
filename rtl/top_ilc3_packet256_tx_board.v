@@ -20,7 +20,10 @@ module top_ilc3_packet256_tx_board #(
     parameter integer UART_BAUD          = 115_200,
     parameter integer SYMBOL_HOLD_CLKS   = 85,
     parameter integer STROBE_OFFSET_CLKS = 68,
-    parameter integer STROBE_PULSE_CLKS  = 4
+    parameter integer STROBE_PULSE_CLKS  = 4,
+    parameter integer ENABLE_TAG         = 0,
+    parameter integer TAG_INTERVAL_SYMBOLS = 32,
+    parameter integer TAG_PAIR_COUNT     = 2
 ) (
     input  wire       sys_clk,
     input  wire       rst_btn_n,
@@ -123,15 +126,23 @@ always @(*) begin
     endcase
 end
 
-reg signed [1:0] amp_sample;
+reg signed [1:0] data_amp_sample;
 always @(*) begin
     case (cur_sym)
-        2'd0: amp_sample = sample_idx ? 2'sd0  : -2'sd1;
-        2'd1: amp_sample = sample_idx ? -2'sd1 : 2'sd0;
-        2'd2: amp_sample = sample_idx ? 2'sd0  : 2'sd1;
-        default: amp_sample = sample_idx ? 2'sd1 : 2'sd0;
+        2'd0: data_amp_sample = sample_idx ? 2'sd0  : -2'sd1;
+        2'd1: data_amp_sample = sample_idx ? -2'sd1 : 2'sd0;
+        2'd2: data_amp_sample = sample_idx ? 2'sd0  : 2'sd1;
+        default: data_amp_sample = sample_idx ? 2'sd1 : 2'sd0;
     endcase
 end
+
+reg        tag_active;
+reg [1:0]  tag_pair_idx;
+reg        tag_sample_idx;
+reg [15:0] data_sym_since_tag;
+
+wire signed [1:0] tag_amp_sample = tag_pair_idx[0] ? -2'sd1 : 2'sd1;
+wire signed [1:0] amp_sample = tag_active ? tag_amp_sample : data_amp_sample;
 
 function [1:0] code_from_amp;
     input signed [1:0] amp;
@@ -170,6 +181,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         tx_sample_dbg <= 32'd0;
         tx_dbg_count  <= 4'd0;
         crc_acc       <= 16'hFFFF;
+        tag_active    <= 1'b0;
+        tag_pair_idx  <= 2'd0;
+        tag_sample_idx <= 1'b0;
+        data_sym_since_tag <= 16'd0;
         pam4_code     <= 2'b00;
         pam4_valid    <= 1'b0;
         pam4_sync     <= 1'b0;
@@ -193,27 +208,52 @@ always @(posedge sys_clk or negedge rst_n) begin
 
         if (hold_cnt == SYMBOL_HOLD_CLKS - 1) begin
             hold_cnt <= 32'd0;
-            if (sample_idx) begin
+            if (tag_active) begin
                 sample_idx <= 1'b0;
-                if (sym_idx == 2'd3) begin
-                    sym_idx <= 2'd0;
-                    if ((byte_idx >= PREAMBLE_LEN) &&
-                        (byte_idx < PREAMBLE_LEN + HEADER_LEN + PAYLOAD_LEN))
-                        crc_acc <= crc16_byte(crc_acc, frame_byte);
-                    if (byte_idx == FRAME_BYTES - 1) begin
-                        byte_idx <= 9'd0;
-                        pkt_seq  <= pkt_seq + 32'd1;
-                        cur_seq  <= pkt_seq + 32'd1;
-                        pkt_cnt  <= pkt_cnt + 32'd1;
-                        crc_acc  <= 16'hFFFF;
+                if (tag_sample_idx) begin
+                    tag_sample_idx <= 1'b0;
+                    if (tag_pair_idx == TAG_PAIR_COUNT - 1) begin
+                        tag_active <= 1'b0;
+                        tag_pair_idx <= 2'd0;
+                        data_sym_since_tag <= 16'd0;
                     end else begin
-                        byte_idx <= byte_idx + 9'd1;
+                        tag_pair_idx <= tag_pair_idx + 2'd1;
                     end
                 end else begin
-                    sym_idx <= sym_idx + 2'd1;
+                    tag_sample_idx <= 1'b1;
                 end
             end else begin
-                sample_idx <= 1'b1;
+                if (sample_idx) begin
+                    sample_idx <= 1'b0;
+                    if ((ENABLE_TAG != 0) && (data_sym_since_tag == TAG_INTERVAL_SYMBOLS - 1) &&
+                        !((byte_idx == FRAME_BYTES - 1) && (sym_idx == 2'd3))) begin
+                        tag_active <= 1'b1;
+                        tag_pair_idx <= 2'd0;
+                        tag_sample_idx <= 1'b0;
+                    end else begin
+                        data_sym_since_tag <= data_sym_since_tag + 16'd1;
+                    end
+                    if (sym_idx == 2'd3) begin
+                        sym_idx <= 2'd0;
+                        if ((byte_idx >= PREAMBLE_LEN) &&
+                            (byte_idx < PREAMBLE_LEN + HEADER_LEN + PAYLOAD_LEN))
+                            crc_acc <= crc16_byte(crc_acc, frame_byte);
+                        if (byte_idx == FRAME_BYTES - 1) begin
+                            byte_idx <= 9'd0;
+                            pkt_seq  <= pkt_seq + 32'd1;
+                            cur_seq  <= pkt_seq + 32'd1;
+                            pkt_cnt  <= pkt_cnt + 32'd1;
+                            crc_acc  <= 16'hFFFF;
+                            data_sym_since_tag <= 16'd0;
+                        end else begin
+                            byte_idx <= byte_idx + 9'd1;
+                        end
+                    end else begin
+                        sym_idx <= sym_idx + 2'd1;
+                    end
+                end else begin
+                    sample_idx <= 1'b1;
+                end
             end
         end else begin
             hold_cnt <= hold_cnt + 32'd1;

@@ -14,7 +14,10 @@ module top_ilc3_packet256_rx_board #(
     parameter integer CLK_FREQ_HZ = 125_000_000,
     parameter integer UART_BAUD   = 115_200,
     parameter integer SYMBOL_HOLD_CLKS = 85,
-    parameter integer SAMPLE_DELAY_CLKS = 4
+    parameter integer SAMPLE_DELAY_CLKS = 4,
+    parameter integer ENABLE_TAG = 0,
+    parameter integer TAG_INTERVAL_SYMBOLS = 32,
+    parameter integer TAG_PAIR_COUNT = 2
 ) (
     input  wire       sys_clk,
     input  wire       rst_btn_n,
@@ -117,6 +120,9 @@ end
 wire [1:0]  sym_out_w;
 wire        sym_out_valid_w;
 wire [31:0] core_dbg_pairs;
+wire        pair_invalid_pulse_w;
+wire [7:0]  pair_invalid_code_w;
+wire        sample_phase_dbg_w;
 
 ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
     .clk(sys_clk),
@@ -128,7 +134,10 @@ ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
     .sym_out(sym_out_w),
     .sym_out_valid(sym_out_valid_w),
     .sym_out_ready(1'b1),
-    .dbg_pairs(core_dbg_pairs)
+    .dbg_pairs(core_dbg_pairs),
+    .pair_invalid_pulse(pair_invalid_pulse_w),
+    .pair_invalid_code(pair_invalid_code_w),
+    .sample_phase_dbg(sample_phase_dbg_w)
 );
 
 function [15:0] crc16_byte;
@@ -189,6 +198,15 @@ reg [31:0] pkt_ng_cnt;
 reg [31:0] byte_err_cnt;
 reg [31:0] crc_err_cnt;
 reg [31:0] invalid_cnt;
+reg [31:0] pair_invalid_cnt;
+reg [31:0] tag_seen_cnt;
+reg [31:0] tag_valid_cnt;
+reg [31:0] tag_reject_cnt;
+reg [31:0] tag_seq_error_cnt;
+reg [31:0] tag_lock_cnt;
+reg        tag_pending;
+reg [1:0]  tag_pair_idx;
+reg [15:0] data_sym_since_tag;
 reg [31:0] frame_sync_cnt;
 reg [31:0] resync_drop_cnt;
 reg [31:0] partial_drop_cnt;
@@ -222,6 +240,15 @@ always @(posedge sys_clk or negedge rst_n) begin
         byte_err_cnt <= 32'd0;
         crc_err_cnt <= 32'd0;
         invalid_cnt <= 32'd0;
+        pair_invalid_cnt <= 32'd0;
+        tag_seen_cnt <= 32'd0;
+        tag_valid_cnt <= 32'd0;
+        tag_reject_cnt <= 32'd0;
+        tag_seq_error_cnt <= 32'd0;
+        tag_lock_cnt <= 32'd0;
+        tag_pending <= 1'b0;
+        tag_pair_idx <= 2'd0;
+        data_sym_since_tag <= 16'd0;
         frame_sync_cnt <= 32'd0;
         resync_drop_cnt <= 32'd0;
         partial_drop_cnt <= 32'd0;
@@ -240,6 +267,9 @@ always @(posedge sys_clk or negedge rst_n) begin
                 partial_drop_cnt <= partial_drop_cnt + 32'd1;
             end
             need_resync <= 1'b1;
+            tag_pending <= 1'b0;
+            tag_pair_idx <= 2'd0;
+            data_sym_since_tag <= 16'd0;
         end
 
         if (sample_rise && !therm_valid(cmp_s2)) begin
@@ -248,7 +278,39 @@ always @(posedge sys_clk or negedge rst_n) begin
             fail_pulse <= 1'b1;
         end
 
+        if (pair_invalid_pulse_w) begin
+            pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
+            tag_seen_cnt <= tag_seen_cnt + 32'd1;
+            if ((ENABLE_TAG != 0) && tag_pending &&
+                (pair_invalid_code_w == (tag_pair_idx[0] ? 8'hFF : 8'h11))) begin
+                tag_valid_cnt <= tag_valid_cnt + 32'd1;
+                if (tag_pair_idx == TAG_PAIR_COUNT - 1) begin
+                    tag_pending <= 1'b0;
+                    tag_pair_idx <= 2'd0;
+                    data_sym_since_tag <= 16'd0;
+                    tag_lock_cnt <= tag_lock_cnt + 32'd1;
+                end else begin
+                    tag_pair_idx <= tag_pair_idx + 2'd1;
+                end
+            end else begin
+                tag_reject_cnt <= tag_reject_cnt + 32'd1;
+            end
+        end
+
         if (sym_out_valid_w) begin
+            if (ENABLE_TAG != 0) begin
+                if (tag_pending) begin
+                    tag_seq_error_cnt <= tag_seq_error_cnt + 32'd1;
+                    tag_pending <= 1'b0;
+                    tag_pair_idx <= 2'd0;
+                    data_sym_since_tag <= 16'd1;
+                end else if (data_sym_since_tag == TAG_INTERVAL_SYMBOLS - 1) begin
+                    tag_pending <= 1'b1;
+                    tag_pair_idx <= 2'd0;
+                end else begin
+                    data_sym_since_tag <= data_sym_since_tag + 16'd1;
+                end
+            end
             if (need_resync) begin
                 need_resync <= 1'b0;
                 sym_in_byte <= 2'd1;
@@ -260,6 +322,9 @@ always @(posedge sys_clk or negedge rst_n) begin
                 packet_bad <= 1'b0;
                 crc_bad <= 1'b0;
                 pkt_byte_err <= 32'd0;
+                tag_pending <= 1'b0;
+                tag_pair_idx <= 2'd0;
+                data_sym_since_tag <= 16'd1;
             end else begin
                 sym_in_byte_acc <= {sym_in_byte_acc[3:0], sym_out_w};
                 if (sym_in_byte == 2'd3) begin
@@ -341,7 +406,7 @@ function [7:0] nibble_ascii;
     end
 endfunction
 
-// "ILC3PKT SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX WI=XXXXXXXX FS=XXXXXXXX RS=XXXXXXXX DR=XXXXXXXX LB=XX\r\n"
+// "ILC3PKT SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX WI=XXXXXXXX FS=XXXXXXXX RS=XXXXXXXX DR=XXXXXXXX PI=XXXXXXXX TS=XXXXXXXX TV=XXXXXXXX TR=XXXXXXXX TE=XXXXXXXX TL=XXXXXXXX LB=XX\r\n"
 function [7:0] log_char;
     input [7:0] ptr;
     input [31:0] pk;
@@ -353,6 +418,12 @@ function [7:0] log_char;
     input [31:0] fs;
     input [31:0] rs;
     input [31:0] dr;
+    input [31:0] pi;
+    input [31:0] ts;
+    input [31:0] tv;
+    input [31:0] tr;
+    input [31:0] te;
+    input [31:0] tl;
     input [7:0]  lb;
     begin
         case (ptr)
@@ -367,27 +438,35 @@ function [7:0] log_char;
             8'd88: log_char="F"; 8'd89: log_char="S"; 8'd90: log_char="="; 8'd91: log_char=nibble_ascii(fs[31:28]); 8'd92: log_char=nibble_ascii(fs[27:24]); 8'd93: log_char=nibble_ascii(fs[23:20]); 8'd94: log_char=nibble_ascii(fs[19:16]); 8'd95: log_char=nibble_ascii(fs[15:12]); 8'd96: log_char=nibble_ascii(fs[11:8]); 8'd97: log_char=nibble_ascii(fs[7:4]); 8'd98: log_char=nibble_ascii(fs[3:0]); 8'd99: log_char=" ";
             8'd100: log_char="R"; 8'd101: log_char="S"; 8'd102: log_char="="; 8'd103: log_char=nibble_ascii(rs[31:28]); 8'd104: log_char=nibble_ascii(rs[27:24]); 8'd105: log_char=nibble_ascii(rs[23:20]); 8'd106: log_char=nibble_ascii(rs[19:16]); 8'd107: log_char=nibble_ascii(rs[15:12]); 8'd108: log_char=nibble_ascii(rs[11:8]); 8'd109: log_char=nibble_ascii(rs[7:4]); 8'd110: log_char=nibble_ascii(rs[3:0]); 8'd111: log_char=" ";
             8'd112: log_char="D"; 8'd113: log_char="R"; 8'd114: log_char="="; 8'd115: log_char=nibble_ascii(dr[31:28]); 8'd116: log_char=nibble_ascii(dr[27:24]); 8'd117: log_char=nibble_ascii(dr[23:20]); 8'd118: log_char=nibble_ascii(dr[19:16]); 8'd119: log_char=nibble_ascii(dr[15:12]); 8'd120: log_char=nibble_ascii(dr[11:8]); 8'd121: log_char=nibble_ascii(dr[7:4]); 8'd122: log_char=nibble_ascii(dr[3:0]); 8'd123: log_char=" ";
-            8'd124: log_char="L"; 8'd125: log_char="B"; 8'd126: log_char="="; 8'd127: log_char=nibble_ascii(lb[7:4]); 8'd128: log_char=nibble_ascii(lb[3:0]); 8'd129: log_char=8'h0D; 8'd130: log_char=8'h0A;
+            8'd124: log_char="P"; 8'd125: log_char="I"; 8'd126: log_char="="; 8'd127: log_char=nibble_ascii(pi[31:28]); 8'd128: log_char=nibble_ascii(pi[27:24]); 8'd129: log_char=nibble_ascii(pi[23:20]); 8'd130: log_char=nibble_ascii(pi[19:16]); 8'd131: log_char=nibble_ascii(pi[15:12]); 8'd132: log_char=nibble_ascii(pi[11:8]); 8'd133: log_char=nibble_ascii(pi[7:4]); 8'd134: log_char=nibble_ascii(pi[3:0]); 8'd135: log_char=" ";
+            8'd136: log_char="T"; 8'd137: log_char="S"; 8'd138: log_char="="; 8'd139: log_char=nibble_ascii(ts[31:28]); 8'd140: log_char=nibble_ascii(ts[27:24]); 8'd141: log_char=nibble_ascii(ts[23:20]); 8'd142: log_char=nibble_ascii(ts[19:16]); 8'd143: log_char=nibble_ascii(ts[15:12]); 8'd144: log_char=nibble_ascii(ts[11:8]); 8'd145: log_char=nibble_ascii(ts[7:4]); 8'd146: log_char=nibble_ascii(ts[3:0]); 8'd147: log_char=" ";
+            8'd148: log_char="T"; 8'd149: log_char="V"; 8'd150: log_char="="; 8'd151: log_char=nibble_ascii(tv[31:28]); 8'd152: log_char=nibble_ascii(tv[27:24]); 8'd153: log_char=nibble_ascii(tv[23:20]); 8'd154: log_char=nibble_ascii(tv[19:16]); 8'd155: log_char=nibble_ascii(tv[15:12]); 8'd156: log_char=nibble_ascii(tv[11:8]); 8'd157: log_char=nibble_ascii(tv[7:4]); 8'd158: log_char=nibble_ascii(tv[3:0]); 8'd159: log_char=" ";
+            8'd160: log_char="T"; 8'd161: log_char="R"; 8'd162: log_char="="; 8'd163: log_char=nibble_ascii(tr[31:28]); 8'd164: log_char=nibble_ascii(tr[27:24]); 8'd165: log_char=nibble_ascii(tr[23:20]); 8'd166: log_char=nibble_ascii(tr[19:16]); 8'd167: log_char=nibble_ascii(tr[15:12]); 8'd168: log_char=nibble_ascii(tr[11:8]); 8'd169: log_char=nibble_ascii(tr[7:4]); 8'd170: log_char=nibble_ascii(tr[3:0]); 8'd171: log_char=" ";
+            8'd172: log_char="T"; 8'd173: log_char="E"; 8'd174: log_char="="; 8'd175: log_char=nibble_ascii(te[31:28]); 8'd176: log_char=nibble_ascii(te[27:24]); 8'd177: log_char=nibble_ascii(te[23:20]); 8'd178: log_char=nibble_ascii(te[19:16]); 8'd179: log_char=nibble_ascii(te[15:12]); 8'd180: log_char=nibble_ascii(te[11:8]); 8'd181: log_char=nibble_ascii(te[7:4]); 8'd182: log_char=nibble_ascii(te[3:0]); 8'd183: log_char=" ";
+            8'd184: log_char="T"; 8'd185: log_char="L"; 8'd186: log_char="="; 8'd187: log_char=nibble_ascii(tl[31:28]); 8'd188: log_char=nibble_ascii(tl[27:24]); 8'd189: log_char=nibble_ascii(tl[23:20]); 8'd190: log_char=nibble_ascii(tl[19:16]); 8'd191: log_char=nibble_ascii(tl[15:12]); 8'd192: log_char=nibble_ascii(tl[11:8]); 8'd193: log_char=nibble_ascii(tl[7:4]); 8'd194: log_char=nibble_ascii(tl[3:0]); 8'd195: log_char=" ";
+            8'd196: log_char="L"; 8'd197: log_char="B"; 8'd198: log_char="="; 8'd199: log_char=nibble_ascii(lb[7:4]); 8'd200: log_char=nibble_ascii(lb[3:0]); 8'd201: log_char=8'h0D; 8'd202: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
 endfunction
 
 reg [26:0] sec_cnt;
-reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr;
+reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_pi;
+reg [31:0] log_ts, log_tv, log_tr, log_te, log_tl;
 reg [7:0]  log_lb;
 reg        log_req;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         sec_cnt <= 27'd0; log_req <= 1'b0;
-        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_rs <= 32'd0; log_dr <= 32'd0; log_lb <= 8'd0;
+        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_rs <= 32'd0; log_dr <= 32'd0; log_pi <= 32'd0; log_ts <= 32'd0; log_tv <= 32'd0; log_tr <= 32'd0; log_te <= 32'd0; log_tl <= 32'd0; log_lb <= 8'd0;
     end else begin
         log_req <= 1'b0;
         if (sec_cnt == SEC_COUNTS - 1) begin
             sec_cnt <= 27'd0;
             log_pk <= pkt_cnt; log_ok <= pkt_ok_cnt; log_ng <= pkt_ng_cnt; log_be <= byte_err_cnt;
-            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= resync_drop_cnt; log_dr <= partial_drop_cnt; log_lb <= last_byte;
+            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= resync_drop_cnt; log_dr <= partial_drop_cnt; log_pi <= pair_invalid_cnt; log_lb <= last_byte;
+            log_ts <= tag_seen_cnt; log_tv <= tag_valid_cnt; log_tr <= tag_reject_cnt; log_te <= tag_seq_error_cnt; log_tl <= tag_lock_cnt;
             log_req <= 1'b1;
         end else begin
             sec_cnt <= sec_cnt + 27'd1;
@@ -409,9 +488,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 8'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_lb);
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb);
             uart_start <= 1'b1;
-            if (log_ptr == 8'd130) log_active <= 1'b0;
+            if (log_ptr == 8'd202) log_active <= 1'b0;
             else log_ptr <= log_ptr + 8'd1;
         end
     end
