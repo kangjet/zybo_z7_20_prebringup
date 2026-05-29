@@ -626,8 +626,7 @@ wire        flag_stall = (pkt_cnt == prev_pkt_cnt) &&
                          ((resync_drop_cnt != prev_resync_drop_cnt) ||
                           (partial_drop_cnt != prev_partial_drop_cnt));
 wire        flag_packet_error = (next_dng != 32'd0) ||
-                                (next_dbe != 32'd0) ||
-                                (next_dce != 32'd0);
+                                (next_dbe != 32'd0);
 wire        flag_warning = (next_dh > DH_WARN_TH) || (next_dm < DM_WARN_TH);
 wire [7:0]  next_fg = {1'b0, flag_warning, flag_packet_error, flag_stall, flag_mid_loss, flag_high_shift, flag_collapse, flag_invalid};
 wire [3:0]  next_lv =
