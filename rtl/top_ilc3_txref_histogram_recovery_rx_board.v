@@ -438,6 +438,10 @@ always @(posedge sys_clk or negedge rst_n) begin
                             packet_bad_next = 1'b1;
                             fail_pulse <= 1'b1;
                         end
+                    end else if ((byte_idx >= PREAMBLE_LEN + HEADER_LEN) &&
+                                 (byte_idx < PREAMBLE_LEN + HEADER_LEN + META_LEN)) begin
+                        // TX reference metadata is carried in-frame but is not part of
+                        // the legacy payload/FCS contract in this latency-test variant.
                     end else if (byte_idx == FRAME_BYTES - 2) begin
                         rx_crc_next[15:8] = rx_byte;
                     end else begin
