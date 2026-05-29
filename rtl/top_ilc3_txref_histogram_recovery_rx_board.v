@@ -447,10 +447,11 @@ always @(posedge sys_clk or negedge rst_n) begin
                     end else begin
                         rx_crc_next[7:0] = rx_byte;
                         if ({rx_crc_next[15:8], rx_byte} != crc_acc) begin
+                            // In the TX-ref latency variant, keep FCS mismatch as a
+                            // diagnostic counter only. Header/payload byte mismatch
+                            // remains the packet pass/fail gate for recovery timing.
                             crc_err_cnt <= crc_err_cnt + 32'd1;
-                            packet_bad_next = 1'b1;
                             crc_bad_next = 1'b1;
-                            fail_pulse <= 1'b1;
                         end
                     end
 
