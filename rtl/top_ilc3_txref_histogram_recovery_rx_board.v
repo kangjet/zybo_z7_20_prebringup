@@ -423,7 +423,10 @@ always @(posedge sys_clk or negedge rst_n) begin
                         default: txref_th_rx <= txref_th_rx;
                     endcase
 
-                    if ((byte_idx >= PREAMBLE_LEN) && (byte_idx < PREAMBLE_LEN + HEADER_LEN + META_LEN + PAYLOAD_LEN))
+                    if (((byte_idx >= PREAMBLE_LEN) &&
+                         (byte_idx < PREAMBLE_LEN + HEADER_LEN)) ||
+                        ((byte_idx >= PREAMBLE_LEN + HEADER_LEN + META_LEN) &&
+                         (byte_idx < PREAMBLE_LEN + HEADER_LEN + META_LEN + PAYLOAD_LEN)))
                         crc_next = crc16_byte(crc_acc, rx_byte);
 
                     if ((byte_idx < FRAME_BYTES - CRC_LEN) &&
