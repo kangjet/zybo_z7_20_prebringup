@@ -248,6 +248,10 @@ reg [31:0] lm_rule_err_cnt;
 reg [31:0] hm_rule_err_cnt;
 reg [31:0] mm_rule_err_cnt;
 reg [31:0] pair_risk_cnt;
+reg [31:0] lm_rule_window_cnt;
+reg [31:0] hm_rule_window_cnt;
+reg [31:0] mm_rule_window_cnt;
+reg [31:0] pair_risk_window_cnt;
 reg [31:0] tag_seen_cnt;
 reg [31:0] tag_valid_cnt;
 reg [31:0] tag_reject_cnt;
@@ -299,6 +303,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         hm_rule_err_cnt <= 32'd0;
         mm_rule_err_cnt <= 32'd0;
         pair_risk_cnt <= 32'd0;
+        lm_rule_window_cnt <= 32'd0;
+        hm_rule_window_cnt <= 32'd0;
+        mm_rule_window_cnt <= 32'd0;
+        pair_risk_window_cnt <= 32'd0;
         tag_seen_cnt <= 32'd0;
         tag_valid_cnt <= 32'd0;
         tag_reject_cnt <= 32'd0;
@@ -356,15 +364,20 @@ always @(posedge sys_clk or negedge rst_n) begin
             fail_pulse <= 1'b1;
         end
 
-        if (pair_invalid_pulse_w) begin
+        if (amp_valid_q && (dm_window_sample_cnt == DM_WINDOW_SAMPLES - 1)) begin
+            lm_rule_window_cnt <= 32'd0;
+            hm_rule_window_cnt <= 32'd0;
+            mm_rule_window_cnt <= 32'd0;
+            pair_risk_window_cnt <= 32'd0;
+        end else if (pair_invalid_pulse_w) begin
             pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
-            pair_risk_cnt <= pair_risk_cnt + 32'd1;
+            pair_risk_window_cnt <= pair_risk_window_cnt + 32'd1;
             if (pair_invalid_code_w[7:4] == 4'hF)
-                lm_rule_err_cnt <= lm_rule_err_cnt + 32'd1;
+                lm_rule_window_cnt <= lm_rule_window_cnt + 32'd1;
             else if (pair_invalid_code_w[7:4] == 4'h1)
-                hm_rule_err_cnt <= hm_rule_err_cnt + 32'd1;
+                hm_rule_window_cnt <= hm_rule_window_cnt + 32'd1;
             else if (pair_invalid_code_w == 8'h00)
-                mm_rule_err_cnt <= mm_rule_err_cnt + 32'd1;
+                mm_rule_window_cnt <= mm_rule_window_cnt + 32'd1;
             tag_seen_cnt <= tag_seen_cnt + 32'd1;
             if ((ENABLE_TAG != 0) && tag_pending &&
                 (pair_invalid_code_w == (tag_pair_idx[0] ? 8'hFF : 8'h11))) begin
@@ -665,6 +678,9 @@ wire [3:0]  next_lv =
     (flag_collapse || (flag_stall && flag_high_shift)) ? 4'd3 :
     (flag_stall || (flag_high_shift && flag_mid_loss)) ? 4'd2 :
     (flag_warning || flag_high_shift || flag_mid_loss) ? 4'd1 : 4'd0;
+wire        triple_ref_window_active = (next_lv != 4'd0) ||
+                                       (next_dce != 32'd0) ||
+                                       flag_packet_error;
 wire        self_correct_active = ENABLE_SELF_CORRECT &&
                                   !log_fg[5] &&
                                   !log_fg[0] &&
@@ -858,10 +874,21 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_txh <= {16'd0, txref_th_latched};
             log_txt <= {16'd0, txref_tt_latched};
             log_txo <= txref_ok_cnt;
-            log_lm <= lm_rule_err_cnt;
-            log_hm <= hm_rule_err_cnt;
-            log_mm <= mm_rule_err_cnt;
-            log_pr <= pair_risk_cnt;
+            if (triple_ref_window_active) begin
+                lm_rule_err_cnt <= lm_rule_err_cnt + lm_rule_window_cnt;
+                hm_rule_err_cnt <= hm_rule_err_cnt + hm_rule_window_cnt;
+                mm_rule_err_cnt <= mm_rule_err_cnt + mm_rule_window_cnt;
+                pair_risk_cnt <= pair_risk_cnt + pair_risk_window_cnt;
+                log_lm <= lm_rule_err_cnt + lm_rule_window_cnt;
+                log_hm <= hm_rule_err_cnt + hm_rule_window_cnt;
+                log_mm <= mm_rule_err_cnt + mm_rule_window_cnt;
+                log_pr <= pair_risk_cnt + pair_risk_window_cnt;
+            end else begin
+                log_lm <= lm_rule_err_cnt;
+                log_hm <= hm_rule_err_cnt;
+                log_mm <= mm_rule_err_cnt;
+                log_pr <= pair_risk_cnt;
+            end
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
