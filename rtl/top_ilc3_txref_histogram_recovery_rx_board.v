@@ -170,6 +170,7 @@ wire [31:0] core_dbg_pairs;
 wire        pair_invalid_pulse_w;
 wire [7:0]  pair_invalid_code_w;
 wire        sample_phase_dbg_w;
+wire        expected_tag_pair_w;
 
 ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
     .clk(sys_clk),
@@ -186,6 +187,9 @@ ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
     .pair_invalid_code(pair_invalid_code_w),
     .sample_phase_dbg(sample_phase_dbg_w)
 );
+
+assign expected_tag_pair_w = (ENABLE_TAG != 0) && tag_pending &&
+                             (pair_invalid_code_w == (tag_pair_idx[0] ? 8'hFF : 8'h11));
 
 function [15:0] crc16_byte;
     input [15:0] crc;
@@ -373,16 +377,8 @@ always @(posedge sys_clk or negedge rst_n) begin
             pair_risk_window_cnt <= 32'd0;
         end else if (pair_invalid_pulse_w) begin
             pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
-            pair_risk_window_cnt <= pair_risk_window_cnt + 32'd1;
-            if (pair_invalid_code_w[7:4] == 4'hF)
-                lm_rule_window_cnt <= lm_rule_window_cnt + 32'd1;
-            else if (pair_invalid_code_w[7:4] == 4'h1)
-                hm_rule_window_cnt <= hm_rule_window_cnt + 32'd1;
-            else if (pair_invalid_code_w == 8'h00)
-                mm_rule_window_cnt <= mm_rule_window_cnt + 32'd1;
             tag_seen_cnt <= tag_seen_cnt + 32'd1;
-            if ((ENABLE_TAG != 0) && tag_pending &&
-                (pair_invalid_code_w == (tag_pair_idx[0] ? 8'hFF : 8'h11))) begin
+            if (expected_tag_pair_w) begin
                 tag_valid_cnt <= tag_valid_cnt + 32'd1;
                 if (tag_pair_idx == TAG_PAIR_COUNT - 1) begin
                     tag_pending <= 1'b0;
@@ -393,6 +389,13 @@ always @(posedge sys_clk or negedge rst_n) begin
                     tag_pair_idx <= tag_pair_idx + 2'd1;
                 end
             end else begin
+                pair_risk_window_cnt <= pair_risk_window_cnt + 32'd1;
+                if (pair_invalid_code_w[7:4] == 4'hF)
+                    lm_rule_window_cnt <= lm_rule_window_cnt + 32'd1;
+                else if (pair_invalid_code_w[7:4] == 4'h1)
+                    hm_rule_window_cnt <= hm_rule_window_cnt + 32'd1;
+                else if (pair_invalid_code_w == 8'h00)
+                    mm_rule_window_cnt <= mm_rule_window_cnt + 32'd1;
                 tag_reject_cnt <= tag_reject_cnt + 32'd1;
             end
         end
