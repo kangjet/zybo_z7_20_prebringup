@@ -244,6 +244,10 @@ reg [31:0] byte_err_cnt;
 reg [31:0] crc_err_cnt;
 reg [31:0] invalid_cnt;
 reg [31:0] pair_invalid_cnt;
+reg [31:0] lm_rule_err_cnt;
+reg [31:0] hm_rule_err_cnt;
+reg [31:0] mm_rule_err_cnt;
+reg [31:0] pair_risk_cnt;
 reg [31:0] tag_seen_cnt;
 reg [31:0] tag_valid_cnt;
 reg [31:0] tag_reject_cnt;
@@ -291,6 +295,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         crc_err_cnt <= 32'd0;
         invalid_cnt <= 32'd0;
         pair_invalid_cnt <= 32'd0;
+        lm_rule_err_cnt <= 32'd0;
+        hm_rule_err_cnt <= 32'd0;
+        mm_rule_err_cnt <= 32'd0;
+        pair_risk_cnt <= 32'd0;
         tag_seen_cnt <= 32'd0;
         tag_valid_cnt <= 32'd0;
         tag_reject_cnt <= 32'd0;
@@ -350,6 +358,13 @@ always @(posedge sys_clk or negedge rst_n) begin
 
         if (pair_invalid_pulse_w) begin
             pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
+            pair_risk_cnt <= pair_risk_cnt + 32'd1;
+            if (pair_invalid_code_w[7:4] == 4'hF)
+                lm_rule_err_cnt <= lm_rule_err_cnt + 32'd1;
+            else if (pair_invalid_code_w[7:4] == 4'h1)
+                hm_rule_err_cnt <= hm_rule_err_cnt + 32'd1;
+            else if (pair_invalid_code_w == 8'h00)
+                mm_rule_err_cnt <= mm_rule_err_cnt + 32'd1;
             tag_seen_cnt <= tag_seen_cnt + 32'd1;
             if ((ENABLE_TAG != 0) && tag_pending &&
                 (pair_invalid_code_w == (tag_pair_idx[0] ? 8'hFF : 8'h11))) begin
@@ -512,7 +527,7 @@ endfunction
 //   RM = max recovery latency in sys_clk cycles
 //   RA = accumulated recovery latency in sys_clk cycles, avg = RA / RC
 // Short latency log for timing margin:
-// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LV=X SC=XX\r\n"
+// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX\r\n"
 function [7:0] log_char;
     input [8:0] ptr;
     input [31:0] pk;
@@ -547,6 +562,10 @@ function [7:0] log_char;
     input [31:0] th;
     input [31:0] tt;
     input [31:0] txo;
+    input [31:0] lm;
+    input [31:0] hm;
+    input [31:0] mm;
+    input [31:0] pr;
     begin
         case (ptr)
             8'd0: log_char="I"; 8'd1: log_char="L"; 8'd2: log_char="C"; 8'd3: log_char="3"; 8'd4: log_char="H"; 8'd5: log_char="S"; 8'd6: log_char="T"; 8'd7: log_char=" ";
@@ -569,8 +588,12 @@ function [7:0] log_char;
             8'd196: log_char="T"; 8'd197: log_char="H"; 8'd198: log_char="="; 8'd199: log_char=nibble_ascii(th[15:12]); 8'd200: log_char=nibble_ascii(th[11:8]); 8'd201: log_char=nibble_ascii(th[7:4]); 8'd202: log_char=nibble_ascii(th[3:0]); 8'd203: log_char=" ";
             8'd204: log_char="T"; 8'd205: log_char="T"; 8'd206: log_char="="; 8'd207: log_char=nibble_ascii(tt[15:12]); 8'd208: log_char=nibble_ascii(tt[11:8]); 8'd209: log_char=nibble_ascii(tt[7:4]); 8'd210: log_char=nibble_ascii(tt[3:0]); 8'd211: log_char=" ";
             8'd212: log_char="T"; 8'd213: log_char="O"; 8'd214: log_char="="; 8'd215: log_char=nibble_ascii(txo[31:28]); 8'd216: log_char=nibble_ascii(txo[27:24]); 8'd217: log_char=nibble_ascii(txo[23:20]); 8'd218: log_char=nibble_ascii(txo[19:16]); 8'd219: log_char=nibble_ascii(txo[15:12]); 8'd220: log_char=nibble_ascii(txo[11:8]); 8'd221: log_char=nibble_ascii(txo[7:4]); 8'd222: log_char=nibble_ascii(txo[3:0]); 8'd223: log_char=" ";
-            8'd224: log_char="L"; 8'd225: log_char="V"; 8'd226: log_char="="; 8'd227: log_char=nibble_ascii(lv); 8'd228: log_char=" ";
-            8'd229: log_char="S"; 8'd230: log_char="C"; 8'd231: log_char="="; 8'd232: log_char=nibble_ascii(sc[7:4]); 8'd233: log_char=nibble_ascii(sc[3:0]); 8'd234: log_char=8'h0D; 8'd235: log_char=8'h0A;
+            8'd224: log_char="L"; 8'd225: log_char="M"; 8'd226: log_char="="; 8'd227: log_char=nibble_ascii(lm[31:28]); 8'd228: log_char=nibble_ascii(lm[27:24]); 8'd229: log_char=nibble_ascii(lm[23:20]); 8'd230: log_char=nibble_ascii(lm[19:16]); 8'd231: log_char=nibble_ascii(lm[15:12]); 8'd232: log_char=nibble_ascii(lm[11:8]); 8'd233: log_char=nibble_ascii(lm[7:4]); 8'd234: log_char=nibble_ascii(lm[3:0]); 8'd235: log_char=" ";
+            8'd236: log_char="H"; 8'd237: log_char="M"; 8'd238: log_char="="; 8'd239: log_char=nibble_ascii(hm[31:28]); 8'd240: log_char=nibble_ascii(hm[27:24]); 8'd241: log_char=nibble_ascii(hm[23:20]); 8'd242: log_char=nibble_ascii(hm[19:16]); 8'd243: log_char=nibble_ascii(hm[15:12]); 8'd244: log_char=nibble_ascii(hm[11:8]); 8'd245: log_char=nibble_ascii(hm[7:4]); 8'd246: log_char=nibble_ascii(hm[3:0]); 8'd247: log_char=" ";
+            8'd248: log_char="M"; 8'd249: log_char="M"; 8'd250: log_char="="; 8'd251: log_char=nibble_ascii(mm[31:28]); 8'd252: log_char=nibble_ascii(mm[27:24]); 8'd253: log_char=nibble_ascii(mm[23:20]); 8'd254: log_char=nibble_ascii(mm[19:16]); 8'd255: log_char=nibble_ascii(mm[15:12]); 8'd256: log_char=nibble_ascii(mm[11:8]); 8'd257: log_char=nibble_ascii(mm[7:4]); 8'd258: log_char=nibble_ascii(mm[3:0]); 8'd259: log_char=" ";
+            8'd260: log_char="P"; 8'd261: log_char="R"; 8'd262: log_char="="; 8'd263: log_char=nibble_ascii(pr[31:28]); 8'd264: log_char=nibble_ascii(pr[27:24]); 8'd265: log_char=nibble_ascii(pr[23:20]); 8'd266: log_char=nibble_ascii(pr[19:16]); 8'd267: log_char=nibble_ascii(pr[15:12]); 8'd268: log_char=nibble_ascii(pr[11:8]); 8'd269: log_char=nibble_ascii(pr[7:4]); 8'd270: log_char=nibble_ascii(pr[3:0]); 8'd271: log_char=" ";
+            8'd272: log_char="L"; 8'd273: log_char="V"; 8'd274: log_char="="; 8'd275: log_char=nibble_ascii(lv); 8'd276: log_char=" ";
+            8'd277: log_char="S"; 8'd278: log_char="C"; 8'd279: log_char="="; 8'd280: log_char=nibble_ascii(sc[7:4]); 8'd281: log_char=nibble_ascii(sc[3:0]); 8'd282: log_char=8'h0D; 8'd283: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
@@ -587,6 +610,7 @@ reg [31:0] log_hc, log_mc, log_lc, log_ic;
 reg [31:0] log_dh, log_dm, log_dl, log_di, log_db, log_dd;
 reg [31:0] log_df, log_rc, log_rd;
 reg [31:0] log_txh, log_txt, log_txo;
+reg [31:0] log_lm, log_hm, log_mm, log_pr;
 reg [31:0] prev_hc, prev_mc, prev_lc, prev_ic;
 reg [31:0] prev_pkt_cnt, prev_resync_drop_cnt, prev_partial_drop_cnt;
 reg [31:0] prev_pkt_ng_cnt, prev_byte_err_cnt, prev_crc_err_cnt;
@@ -681,6 +705,8 @@ always @(posedge sys_clk or negedge rst_n) begin
         log_hc <= 32'd0; log_mc <= 32'd0; log_lc <= 32'd0; log_ic <= 32'd0;
         log_dh <= 32'd0; log_dm <= 32'd0; log_dl <= 32'd0; log_di <= 32'd0; log_db <= 32'd0; log_dd <= 32'd0;
         log_df <= 32'd0; log_rc <= 32'd0; log_rd <= 32'd0;
+        log_txh <= 32'd0; log_txt <= 32'd0; log_txo <= 32'd0;
+        log_lm <= 32'd0; log_hm <= 32'd0; log_mm <= 32'd0; log_pr <= 32'd0;
         prev_hc <= 32'd0; prev_mc <= 32'd0; prev_lc <= 32'd0; prev_ic <= 32'd0;
         prev_pkt_cnt <= 32'd0; prev_resync_drop_cnt <= 32'd0; prev_partial_drop_cnt <= 32'd0;
         prev_pkt_ng_cnt <= 32'd0; prev_byte_err_cnt <= 32'd0; prev_crc_err_cnt <= 32'd0;
@@ -832,6 +858,10 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_txh <= {16'd0, txref_th_latched};
             log_txt <= {16'd0, txref_tt_latched};
             log_txo <= txref_ok_cnt;
+            log_lm <= lm_rule_err_cnt;
+            log_hm <= hm_rule_err_cnt;
+            log_mm <= mm_rule_err_cnt;
+            log_pr <= pair_risk_cnt;
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
@@ -866,9 +896,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo);
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr);
             uart_start <= 1'b1;
-            if (log_ptr == 9'd235) log_active <= 1'b0;
+            if (log_ptr == 9'd283) log_active <= 1'b0;
             else log_ptr <= log_ptr + 9'd1;
         end
     end
