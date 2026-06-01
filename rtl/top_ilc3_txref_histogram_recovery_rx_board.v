@@ -57,6 +57,8 @@ localparam [31:0] DM_LOW_TH  = 32'd10678;
 localparam [31:0] DL_MIN_TH  = 32'd2921;
 localparam [31:0] DM_DEFER_DD_TH = 32'd1460;
 localparam [31:0] DM_RECOVER_DD_TH = 32'd183;
+localparam [31:0] TR_FAST_HM_TH = 32'd2048;
+localparam [31:0] TR_FAST_PR_TH = 32'd4096;
 localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
 localparam [7:0] SELF_CORRECT_MIN_DELAY_8 = SELF_CORRECT_MIN_DELAY;
 localparam [7:0] SELF_CORRECT_MAX_DELAY_8 = SELF_CORRECT_MAX_DELAY;
@@ -695,6 +697,11 @@ wire        self_correct_can_dec = sample_delay_trim_q > SELF_CORRECT_MIN_DELAY_
 wire        self_correct_fast_now = self_correct_active &&
                                     (log_lv == 4'd3) &&
                                     ((log_dl == 32'd0) || (log_fg == 8'h5E));
+wire        triple_ref_fast_reset = ENABLE_SELF_CORRECT &&
+                                    (log_lv >= 4'd3) &&
+                                    ((log_pr >= TR_FAST_PR_TH) ||
+                                     (log_hm >= TR_FAST_HM_TH) ||
+                                     (log_mm != 32'd0));
 wire        self_correct_can_inc2 = sample_delay_trim_q <= (SELF_CORRECT_MAX_DELAY_8 - 8'd2);
 wire        self_correct_can_dec2 = sample_delay_trim_q >= (SELF_CORRECT_MIN_DELAY_8 + 8'd2);
 wire [7:0]  self_correct_inc_delay = sample_delay_trim_q + 8'd1;
@@ -823,6 +830,11 @@ always @(posedge sys_clk or negedge rst_n) begin
                     sample_delay_trim_q <= SAMPLE_DELAY_INIT;
                     log_sc <= SAMPLE_DELAY_INIT;
                     rx_soft_recover_q <= 1'b1;
+                end else if (triple_ref_fast_reset) begin
+                    self_correct_dir_q <= 1'b1;
+                    self_correct_fast_q <= 1'b1;
+                    sample_delay_trim_q <= SAMPLE_DELAY_INIT;
+                    log_sc <= SAMPLE_DELAY_INIT;
                 end else if (self_correct_apply_due_q) begin
                     self_correct_dir_q <= self_correct_next_dir;
                     self_correct_fast_q <= self_correct_fast_now;
