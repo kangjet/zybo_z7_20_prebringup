@@ -13,9 +13,7 @@
 //              TT = TX inserted TAG sample count per frame
 //              version=1, mode=ILC3(3), PSDU length=256B
 //   PSDU     : 256 deterministic bytes, byte[i] = i ^ seq[7:0] ^ A5
-//   FCS      : CRC-16/CCITT-FALSE over header + PSDU
-//              Meta bytes are kept outside the FCS in this latency-test
-//              variant to preserve the packet CRC contract.
+//   FCS      : CRC-16/CCITT-FALSE over header + meta + PSDU
 //
 // Log:
 //   ILC3PTX PK=XXXXXXXX SA=XXXXXXXX DP=XXXXXXXX TH=XXXXXXXX TM=XXXXXXXX TL=XXXXXXXX TT=XXXXXXXX
@@ -283,10 +281,8 @@ always @(posedge sys_clk or negedge rst_n) begin
                     end
                     if (sym_idx == 2'd3) begin
                         sym_idx <= 2'd0;
-                        if (((byte_idx >= PREAMBLE_LEN) &&
-                             (byte_idx < PREAMBLE_LEN + HEADER_LEN)) ||
-                            ((byte_idx >= PREAMBLE_LEN + HEADER_LEN + META_LEN) &&
-                             (byte_idx < PREAMBLE_LEN + HEADER_LEN + META_LEN + PAYLOAD_LEN)))
+                        if ((byte_idx >= PREAMBLE_LEN) &&
+                            (byte_idx < FRAME_BYTES - CRC_LEN))
                             crc_acc <= crc16_byte(crc_acc, frame_byte);
                         if (byte_idx == FRAME_BYTES - 1) begin
                             byte_idx <= 9'd0;
