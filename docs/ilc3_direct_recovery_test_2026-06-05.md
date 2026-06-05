@@ -328,6 +328,38 @@ known-payload expected-symbol shadow recovery
 - CRC syndrome 기반 후보 선택
 - M 기준 아날로그 거리 기반 비례 보정
 
+### 5.9 복구 한계 영역과 재전송 시퀀스
+
+이번 실측에서 400 mV와 600 mV는 known-payload shadow recovery 후 `NG=0`, `CE=0`으로 통과하였다. 반면 700 mV에서는 `PA`가 존재하여 복구 로직은 계속 동작하지만 `NG/CE`가 다시 발생하였다.
+
+이는 700 mV 이상이 단순 symbol-level correction만으로 끝까지 밀어붙일 영역이 아니라, link stability와 retransmission sequence로 넘겨야 하는 한계 영역임을 의미한다.
+
+권장 판단 구조:
+
+```text
+중간 노이즈 영역:
+  TR 흔들림 발생
+  -> expected-symbol / rule 기반 복구
+  -> CRC 통과
+  -> OK
+
+한계 노이즈 영역:
+  TR 흔들림 + PR/DD/CRC 실패 증가
+  -> 일부 복구 성공
+  -> residual NG/CE 발생
+  -> packet discard
+  -> resync 또는 retransmission request
+```
+
+설계 기준:
+
+- CRC가 통과한 packet만 최종 OK로 인정한다.
+- CRC가 실패한 packet은 복구 추정값이 있더라도 OK로 승격하지 않는다.
+- 700 mV 이상처럼 residual error가 남는 영역은 data correction 영역이 아니라 link unstable 영역으로 분류한다.
+- 이 영역에서는 packet discard, resync, retransmission sequence가 더 적절하다.
+
+따라서 ILC3 복구 구조의 목표는 모든 노이즈 조건을 무조건 복구하는 것이 아니라, 복구 가능한 symbol contamination 영역과 재전송이 필요한 link instability 영역을 명확히 분리하는 것이다.
+
 ## 6. 해석
 
 이번 실증 기준으로는 known payload shadow recovery 적용 시 600 mV까지 packet/CRC error 0을 확인하였다. 700 mV는 기존 결과와 동일하게 한계 영역으로 보이며, `NG`, `CE`, `RD`가 다시 나타난다.
