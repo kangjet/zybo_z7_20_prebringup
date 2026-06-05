@@ -77,7 +77,32 @@ ILC3 수신부에서 노이즈로 인해 수신 pair가 흔들리는 경우, 단
 
 판정: 400 mV 조건에서 payload shadow recovery 후 packet/CRC error 0.
 
-### 4.3 600 mV
+### 4.3 500 mV
+
+장시간 관측에서 packet/CRC error 없이 통과하였다.
+
+대표 long-run 결과:
+
+- `PK=0019DD2D` = 1,695,021 packets
+- `OK=0019DD2D` = 1,695,021 packets
+- `NG=00000000`
+- `CE=00000000`
+- `RD=00000000`
+- `DF=0000038D` = 909
+- `RC=0000038D` = 909
+- `PC=04967651` = 76,969,553 candidates
+- `PA=0000E387` = 58,247 accepted recoveries
+- `PJ=049592CA` = 76,911,306 rejected candidates
+
+계산:
+
+- packet 통과율 = 100 %
+- `PA/PK` = 58,247 / 1,695,021 = packet당 평균 약 0.034회 복구
+- `PA/PC` = 58,247 / 76,969,553 = 약 0.0757 %
+
+판정: 500 mV 조건에서 recovery accept가 실제로 발생했지만 packet/CRC error는 0으로 유지되었다. 이는 400 mV와 600 mV 사이의 중간 지점에서도 복구 영역이 연속적으로 유지됨을 보여준다.
+
+### 4.4 600 mV
 
 장시간 관측에서 packet/CRC error 없이 통과하였다.
 
@@ -92,7 +117,7 @@ ILC3 수신부에서 노이즈로 인해 수신 pair가 흔들리는 경우, 단
 
 판정: 600 mV 조건에서 payload shadow recovery 후 packet/CRC error 0.
 
-### 4.4 700 mV
+### 4.5 700 mV
 
 700 mV에서는 복구가 동작하지만 residual packet error가 발생하였다.
 
@@ -330,7 +355,7 @@ known-payload expected-symbol shadow recovery
 
 ### 5.9 복구 한계 영역과 재전송 시퀀스
 
-이번 실측에서 400 mV와 600 mV는 known-payload shadow recovery 후 `NG=0`, `CE=0`으로 통과하였다. 반면 700 mV에서는 `PA`가 존재하여 복구 로직은 계속 동작하지만 `NG/CE`가 다시 발생하였다.
+이번 실측에서 400 mV, 500 mV, 600 mV는 known-payload shadow recovery 후 `NG=0`, `CE=0`, `RD=0`으로 통과하였다. 반면 700 mV에서는 `PA`가 존재하여 복구 로직은 계속 동작하지만 `NG/CE`가 다시 발생하였다.
 
 이는 700 mV 이상이 단순 symbol-level correction만으로 끝까지 밀어붙일 영역이 아니라, link stability와 retransmission sequence로 넘겨야 하는 한계 영역임을 의미한다.
 
@@ -461,7 +486,7 @@ symbol/pair 수신
 
 ## 6. 해석
 
-이번 실증 기준으로는 known payload shadow recovery 적용 시 600 mV까지 packet/CRC error 0을 확인하였다. 700 mV는 기존 결과와 동일하게 한계 영역으로 보이며, `NG`, `CE`, `RD`가 다시 나타난다.
+이번 실증 기준으로는 known payload shadow recovery 적용 시 400 mV, 500 mV, 600 mV에서 packet/CRC error 0을 확인하였다. 700 mV는 기존 결과와 동일하게 한계 영역으로 보이며, `NG`, `CE`, `RD`가 다시 나타난다.
 
 ### 6.1 TR 이슈와 실제 복구 판단
 
@@ -514,7 +539,7 @@ payload 수신
 현재 버전은 다음을 실증하였다.
 
 - payload 제한 조건에서 known payload expected-symbol 복구 가능
-- 400 mV 및 600 mV에서 packet/CRC error 0 확인
+- 400 mV, 500 mV, 600 mV에서 packet/CRC error 0 확인
 - 700 mV에서는 residual error 발생으로 한계 영역 확인
 - 기존 RC 라인 정상화와 구분되는 직접 payload recovery 경로가 추가됨
 
