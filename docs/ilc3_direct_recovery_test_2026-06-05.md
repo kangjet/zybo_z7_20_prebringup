@@ -83,22 +83,23 @@ ILC3 수신부에서 노이즈로 인해 수신 pair가 흔들리는 경우, 단
 
 대표 long-run 결과:
 
-- `PK=0019DD2D` = 1,695,021 packets
-- `OK=0019DD2D` = 1,695,021 packets
+- `PK=0024FCED` = 2,424,045 packets
+- `OK=0024FCED` = 2,424,045 packets
 - `NG=00000000`
+- `BE=00000000`
 - `CE=00000000`
 - `RD=00000000`
-- `DF=0000038D` = 909
-- `RC=0000038D` = 909
-- `PC=04967651` = 76,969,553 candidates
-- `PA=0000E387` = 58,247 accepted recoveries
-- `PJ=049592CA` = 76,911,306 rejected candidates
+- `DF=0000075B` = 1,883
+- `RC=0000075B` = 1,883
+- `PC=12005AA0` = 302,013,088 candidates
+- `PA=0001D9AE` = 121,262 accepted recoveries
+- `PJ=11FE80F2` = 301,891,826 rejected candidates
 
 계산:
 
 - packet 통과율 = 100 %
-- `PA/PK` = 58,247 / 1,695,021 = packet당 평균 약 0.034회 복구
-- `PA/PC` = 58,247 / 76,969,553 = 약 0.0757 %
+- `PA/PK` = 121,262 / 2,424,045 = packet당 평균 약 0.050회 복구
+- `PA/PC` = 121,262 / 302,013,088 = 약 0.0402 %
 
 판정: 500 mV 조건에서 recovery accept가 실제로 발생했지만 packet/CRC error는 0으로 유지되었다. 이는 400 mV와 600 mV 사이의 중간 지점에서도 복구 영역이 연속적으로 유지됨을 보여준다.
 
