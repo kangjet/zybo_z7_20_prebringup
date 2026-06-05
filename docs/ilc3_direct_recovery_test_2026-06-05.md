@@ -360,6 +360,36 @@ known-payload expected-symbol shadow recovery
 
 따라서 ILC3 복구 구조의 목표는 모든 노이즈 조건을 무조건 복구하는 것이 아니라, 복구 가능한 symbol contamination 영역과 재전송이 필요한 link instability 영역을 명확히 분리하는 것이다.
 
+### 5.10 복구 시간 해석
+
+현재 로그만으로는 correction 발생 시점부터 CRC 통과까지의 절대 시간을 직접 산출할 수 없다. 현재 로그는 packet count, error count, correction candidate/accept/reject count 중심이며, correction event별 timestamp를 포함하지 않는다.
+
+다만 구조적으로 중요한 점은 확인할 수 있다.
+
+데이터 복구는 기존 link recovery처럼 별도 resync 절차를 수행하는 것이 아니라, RX payload 처리 pipeline 내부에서 inline으로 수행된다.
+
+```text
+symbol/pair 수신
+-> payload 위치 확인
+-> expected symbol 확인
+-> correction accept
+-> byte/packet 조립
+-> CRC 검증
+```
+
+따라서 400 mV 및 600 mV에서 `PA > 0`임에도 `NG=0`, `CE=0`이 유지된 결과는, 복구가 별도 link recovery 지연으로 빠지지 않고 packet 처리 경로 안에서 흡수되었음을 의미한다.
+
+기존 link recovery 시간인 51~91 us는 link resync 또는 line-level recovery 시간으로 보아야 한다. 반면 이번 data recovery는 그보다 앞단의 symbol/payload correction 단계이다.
+
+정리:
+
+- 기존 link recovery: link 안정화 또는 resync에 필요한 시간, 약 51~91 us로 측정됨
+- 현재 data recovery: payload pipeline 내부 inline correction
+- 400/600 mV 조건: correction event가 있었지만 packet/CRC failure 없이 통과
+- 따라서 현재 데이터 복구는 별도 link recovery 시간으로 전이되지 않고 packet 처리 경로 안에서 종료된 것으로 해석할 수 있다.
+
+정확한 event-level 복구 시간을 측정하려면 추후 correction 발생 cycle, CRC 비교 cycle, packet boundary cycle을 별도 timestamp counter로 로깅해야 한다.
+
 ## 6. 해석
 
 이번 실증 기준으로는 known payload shadow recovery 적용 시 600 mV까지 packet/CRC error 0을 확인하였다. 700 mV는 기존 결과와 동일하게 한계 영역으로 보이며, `NG`, `CE`, `RD`가 다시 나타난다.
