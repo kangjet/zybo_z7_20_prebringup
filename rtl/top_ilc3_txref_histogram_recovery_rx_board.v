@@ -57,6 +57,10 @@ localparam [31:0] DM_LOW_TH  = 32'd10678;
 localparam [31:0] DL_MIN_TH  = 32'd2921;
 localparam [31:0] DM_DEFER_DD_TH = 32'd1460;
 localparam [31:0] DM_RECOVER_DD_TH = 32'd183;
+// Packet-local DM thresholds, scaled from the 32768-sample long-DM
+// thresholds to one 274-byte packet (1096 ILC3 symbols, 2192 raw samples).
+localparam [31:0] PKT_DM_DEFER_DD_TH = 32'd98;
+localparam [31:0] PKT_DM_MIN_SAMPLES = 32'd1024;
 localparam [31:0] TR_FAST_HM_TH = 32'd2048;
 localparam [31:0] TR_FAST_PR_TH = 32'd4096;
 localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
@@ -300,6 +304,22 @@ reg [31:0] pkt_byte_err;
 reg [7:0]  last_byte;
 reg        pass_pulse;
 reg        fail_pulse;
+reg        pkt_dm_active_q;
+reg        pkt_dm_defer_pulse;
+reg [31:0] pkt_dm_high_cnt;
+reg [31:0] pkt_dm_mid_cnt;
+reg [31:0] pkt_dm_low_cnt;
+reg [31:0] pkt_dm_invalid_cnt;
+reg [31:0] pkt_dm_sample_cnt;
+reg [31:0] pkt_dm_non_mid_calc;
+reg [31:0] pkt_dm_base_calc;
+reg [31:0] pkt_dm_dd_calc;
+reg [31:0] pkt_dm_abs_dd_calc;
+
+wire       packet_symbol_done_w = sym_out_valid_w &&
+                                  !need_resync &&
+                                  (sym_in_byte == 2'd3) &&
+                                  (byte_idx == FRAME_BYTES - 1);
 
 assign pair_correct_allow_w =
     !need_resync &&
@@ -328,6 +348,56 @@ reg [15:0] rx_crc_next;
 reg        packet_bad_next;
 reg        crc_bad_next;
 reg [7:0]  exp_byte;
+
+always @(posedge sys_clk or negedge rst_n) begin
+    if (!rst_n) begin
+        pkt_dm_active_q <= 1'b0;
+        pkt_dm_defer_pulse <= 1'b0;
+        pkt_dm_high_cnt <= 32'd0;
+        pkt_dm_mid_cnt <= 32'd0;
+        pkt_dm_low_cnt <= 32'd0;
+        pkt_dm_invalid_cnt <= 32'd0;
+        pkt_dm_sample_cnt <= 32'd0;
+        pkt_dm_non_mid_calc <= 32'd0;
+        pkt_dm_base_calc <= 32'd0;
+        pkt_dm_dd_calc <= 32'd0;
+        pkt_dm_abs_dd_calc <= 32'd0;
+    end else begin
+        pkt_dm_defer_pulse <= 1'b0;
+        if (sync_rise || rx_soft_recover_q) begin
+            pkt_dm_active_q <= 1'b1;
+            pkt_dm_high_cnt <= 32'd0;
+            pkt_dm_mid_cnt <= 32'd0;
+            pkt_dm_low_cnt <= 32'd0;
+            pkt_dm_invalid_cnt <= 32'd0;
+            pkt_dm_sample_cnt <= 32'd0;
+        end else begin
+            if (pkt_dm_active_q && amp_valid_q) begin
+                pkt_dm_sample_cnt <= pkt_dm_sample_cnt + 32'd1;
+                case (cmp_s2)
+                    3'b000: pkt_dm_low_cnt <= pkt_dm_low_cnt + 32'd1;
+                    3'b001,
+                    3'b011: pkt_dm_mid_cnt <= pkt_dm_mid_cnt + 32'd1;
+                    3'b111: pkt_dm_high_cnt <= pkt_dm_high_cnt + 32'd1;
+                    default: pkt_dm_invalid_cnt <= pkt_dm_invalid_cnt + 32'd1;
+                endcase
+            end
+
+            if (packet_symbol_done_w) begin
+                pkt_dm_non_mid_calc = pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt;
+                pkt_dm_base_calc = pkt_dm_non_mid_calc;
+                pkt_dm_dd_calc = pkt_dm_mid_cnt - pkt_dm_base_calc;
+                pkt_dm_abs_dd_calc = abs32_twos(pkt_dm_dd_calc);
+                if (pkt_dm_active_q &&
+                    (pkt_dm_sample_cnt >= PKT_DM_MIN_SAMPLES) &&
+                    (pkt_dm_abs_dd_calc >= PKT_DM_DEFER_DD_TH)) begin
+                    pkt_dm_defer_pulse <= 1'b1;
+                end
+                pkt_dm_active_q <= 1'b0;
+            end
+        end
+    end
+end
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -831,7 +901,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         latency_cycle_cnt <= latency_cycle_cnt + 32'd1;
         log_req <= 1'b0;
         rx_soft_recover_q <= 1'b0;
-        if (!dm_defer_active_q && fail_pulse) begin
+        if (!dm_defer_active_q && (fail_pulse || pkt_dm_defer_pulse)) begin
             dm_defer_cnt <= dm_defer_cnt + 32'd1;
             log_df <= dm_defer_cnt + 32'd1;
             dm_defer_active_q <= 1'b1;
