@@ -391,8 +391,6 @@ always @(posedge sys_clk or negedge rst_n) begin
             pair_risk_window_cnt <= 32'd0;
         end else if (pair_invalid_pulse_w) begin
             pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
-            pair_correct_candidate_cnt <= pair_correct_candidate_cnt + 32'd1;
-            pair_correct_last_code <= pair_correct_code_w;
             tag_seen_cnt <= tag_seen_cnt + 32'd1;
             if (expected_tag_pair_w) begin
                 tag_valid_cnt <= tag_valid_cnt + 32'd1;
@@ -415,11 +413,15 @@ always @(posedge sys_clk or negedge rst_n) begin
                 tag_reject_cnt <= tag_reject_cnt + 32'd1;
             end
         end
-        if (pair_correct_pulse_w) begin
+        if (pair_invalid_pulse_w && !expected_tag_pair_w) begin
+            pair_correct_candidate_cnt <= pair_correct_candidate_cnt + 32'd1;
+            pair_correct_last_code <= pair_correct_code_w;
+        end
+        if (pair_correct_pulse_w && !expected_tag_pair_w) begin
             pair_correct_accept_cnt <= pair_correct_accept_cnt + 32'd1;
             pair_correct_last_code <= pair_correct_code_w;
         end
-        if (pair_correct_reject_pulse_w) begin
+        if (pair_correct_reject_pulse_w && !expected_tag_pair_w) begin
             pair_correct_reject_cnt <= pair_correct_reject_cnt + 32'd1;
             pair_correct_last_code <= pair_correct_code_w;
         end
