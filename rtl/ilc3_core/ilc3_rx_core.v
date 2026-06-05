@@ -13,7 +13,8 @@
 module ilc3_rx_core #(
     parameter SYMB_WIDTH = 2,
     parameter AMP_WIDTH  = 4,
-    parameter ENABLE_PAIR_CORRECT = 0
+    parameter ENABLE_PAIR_CORRECT = 0,
+    parameter ENABLE_LL_HH_CORRECT = 0
 ) (
     input  wire                        clk,
     input  wire                        rst_n,
@@ -137,22 +138,34 @@ module ilc3_rx_core #(
                         if (ENABLE_PAIR_CORRECT != 0) begin
                             case ({norm_nibble(t0), norm_nibble(t1)})
                                 8'hFF: begin
-                                    // Both samples collapsed toward L. Use the previous
-                                    // confirmed symbol phase to choose LM vs ML candidate.
-                                    sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
-                                    sym_out_valid <= 1'b1;
-                                    pair_correct_pulse <= 1'b1;
-                                    prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
-                                    prev_sym_valid <= 1'b1;
+                                    if (ENABLE_LL_HH_CORRECT != 0) begin
+                                        // Both samples collapsed toward L. Use the previous
+                                        // confirmed symbol phase to choose LM vs ML candidate.
+                                        sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
+                                        sym_out_valid <= 1'b1;
+                                        pair_correct_pulse <= 1'b1;
+                                        prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
+                                        prev_sym_valid <= 1'b1;
+                                    end else begin
+                                        sym_cand = 2'd0;
+                                        sym_out_valid <= 1'b0;
+                                        pair_correct_reject_pulse <= 1'b1;
+                                    end
                                 end
                                 8'h11: begin
-                                    // Both samples collapsed toward H. Use the previous
-                                    // confirmed symbol phase to choose HM vs MH candidate.
-                                    sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
-                                    sym_out_valid <= 1'b1;
-                                    pair_correct_pulse <= 1'b1;
-                                    prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
-                                    prev_sym_valid <= 1'b1;
+                                    if (ENABLE_LL_HH_CORRECT != 0) begin
+                                        // Both samples collapsed toward H. Use the previous
+                                        // confirmed symbol phase to choose HM vs MH candidate.
+                                        sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
+                                        sym_out_valid <= 1'b1;
+                                        pair_correct_pulse <= 1'b1;
+                                        prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
+                                        prev_sym_valid <= 1'b1;
+                                    end else begin
+                                        sym_cand = 2'd0;
+                                        sym_out_valid <= 1'b0;
+                                        pair_correct_reject_pulse <= 1'b1;
+                                    end
                                 end
                                 8'h00: begin
                                     // Both samples collapsed to M. Keep the previous

@@ -175,7 +175,7 @@ wire [7:0]  pair_correct_code_w;
 wire        sample_phase_dbg_w;
 wire        expected_tag_pair_w;
 
-ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4), .ENABLE_PAIR_CORRECT(1)) u_rx_core (
+ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4), .ENABLE_PAIR_CORRECT(1), .ENABLE_LL_HH_CORRECT(0)) u_rx_core (
     .clk(sys_clk),
     .rst_n(rst_n),
     .frame_sync(frame_sync_q),
