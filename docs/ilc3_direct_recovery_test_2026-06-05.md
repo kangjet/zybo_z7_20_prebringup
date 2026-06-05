@@ -360,7 +360,76 @@ known-payload expected-symbol shadow recovery
 
 따라서 ILC3 복구 구조의 목표는 모든 노이즈 조건을 무조건 복구하는 것이 아니라, 복구 가능한 symbol contamination 영역과 재전송이 필요한 link instability 영역을 명확히 분리하는 것이다.
 
-### 5.10 복구 시간 해석
+### 5.10 CE/NG 발생 시 RC 이후 재전송 요구 루틴
+
+과노이즈 상태에서 `CE/NG > 0`이 발생하면 해당 packet은 데이터 복구 실패로 판단한다. 이때 즉시 retransmission request를 전송하지 않고, 먼저 RC 기반 line recovery 또는 resync를 수행한 뒤 link clean 상태가 확인된 시점에 retransmission request를 전송하는 것이 바람직하다.
+
+이유:
+
+- `CE/NG > 0`이 발생한 시점은 line 자체가 불안정할 가능성이 높다.
+- 불안정한 line 상태에서 retransmission request를 즉시 보내면 request 자체도 손상될 수 있다.
+- 따라서 먼저 line을 안정화한 뒤, clean 상태에서 재전송 요청을 보내야 한다.
+
+권장 플로차트:
+
+```text
+packet 수신
+-> payload recovery 시도
+-> CRC 검사
+
+CRC 통과?
+  예:
+    OK 처리
+    다음 packet 진행
+
+  아니오:
+    CE/NG 증가
+    현재 packet discard
+    RC / resync / line recovery 진입
+    link clean 상태 확인
+    retransmission request 전송
+    TX retransmission 수행
+    RX 재수신
+    CRC 재검증
+```
+
+상태 전이 관점:
+
+```text
+NORMAL_RX
+  -> CE/NG == 0: ACCEPT_PACKET
+  -> CE/NG > 0: DISCARD_PACKET
+
+DISCARD_PACKET
+  -> LINE_RECOVERY
+
+LINE_RECOVERY
+  -> RC 완료
+  -> LINK_CLEAN_CHECK
+
+LINK_CLEAN_CHECK
+  -> clean 확인: REQUEST_RETRANSMIT
+  -> clean 실패: LINE_RECOVERY 반복 또는 RESYNC
+
+REQUEST_RETRANSMIT
+  -> TX 재전송 요청
+  -> WAIT_RETRANSMIT_PACKET
+
+WAIT_RETRANSMIT_PACKET
+  -> packet 재수신
+  -> CRC 재검증
+```
+
+핵심 규칙:
+
+- `PA > 0`이어도 `CE/NG > 0`이면 최종 복구 실패 packet으로 본다.
+- `CE/NG > 0` packet은 절대 OK로 승격하지 않는다.
+- retransmission request는 오류 직후가 아니라 RC 이후 link clean 상태에서 전송한다.
+- RC 이후 요청을 보내는 이유는 재전송 요청 패킷 자체의 손상을 방지하기 위해서이다.
+
+따라서 700 mV 이상과 같은 과노이즈 영역에서는 data recovery와 line recovery/retransmission sequence를 분리해서 처리해야 한다.
+
+### 5.11 복구 시간 해석
 
 현재 로그만으로는 correction 발생 시점부터 CRC 통과까지의 절대 시간을 직접 산출할 수 없다. 현재 로그는 packet count, error count, correction candidate/accept/reject count 중심이며, correction event별 timestamp를 포함하지 않는다.
 
