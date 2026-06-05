@@ -12,7 +12,8 @@
 //======================================================
 module ilc3_rx_core #(
     parameter SYMB_WIDTH = 2,
-    parameter AMP_WIDTH  = 4
+    parameter AMP_WIDTH  = 4,
+    parameter ENABLE_PAIR_CORRECT = 0
 ) (
     input  wire                        clk,
     input  wire                        rst_n,
@@ -28,6 +29,9 @@ module ilc3_rx_core #(
     output reg  [31:0]                 dbg_pairs,
     output reg                         pair_invalid_pulse,
     output reg  [7:0]                  pair_invalid_code,
+    output reg                         pair_correct_pulse,
+    output reg                         pair_correct_reject_pulse,
+    output reg  [7:0]                  pair_correct_code,
     output reg                         sample_phase_dbg
 );
 
@@ -41,6 +45,8 @@ module ilc3_rx_core #(
     reg                        pair_valid;
     reg [SYMB_WIDTH-1:0]      sym_cand;
     reg [3:0]                 dbg_pair_cnt;
+    reg [SYMB_WIDTH-1:0]      prev_sym;
+    reg                       prev_sym_valid;
 
     function signed [AMP_WIDTH-1:0] norm_amp;
         input [AMP_WIDTH-1:0] raw_amp;
@@ -80,10 +86,17 @@ module ilc3_rx_core #(
             dbg_pair_cnt      <= 4'd0;
             pair_invalid_pulse <= 1'b0;
             pair_invalid_code  <= 8'h00;
+            pair_correct_pulse <= 1'b0;
+            pair_correct_reject_pulse <= 1'b0;
+            pair_correct_code <= 8'h00;
             sample_phase_dbg   <= 1'b0;
+            prev_sym           <= {SYMB_WIDTH{1'b0}};
+            prev_sym_valid     <= 1'b0;
         end else begin
             sym_out_valid <= 1'b0;
             pair_invalid_pulse <= 1'b0;
+            pair_correct_pulse <= 1'b0;
+            pair_correct_reject_pulse <= 1'b0;
             sample_phase_dbg <= sample_phase;
 
             if (frame_sync) begin
@@ -91,6 +104,7 @@ module ilc3_rx_core #(
                 pair_valid   <= 1'b0;
                 dbg_pairs    <= 32'd0;
                 dbg_pair_cnt <= 4'd0;
+                prev_sym_valid <= 1'b0;
             end
 
             if (amp_in_valid && amp_in_ready) begin
@@ -112,11 +126,66 @@ module ilc3_rx_core #(
 
             if (pair_valid && sym_out_ready) begin
                 case ({t0, t1})
-                    {4'hF, 4'h0}: begin sym_cand = 2'd0; sym_out_valid <= 1'b1; end // [-1, 0]
-                    {4'h0, 4'hF}: begin sym_cand = 2'd1; sym_out_valid <= 1'b1; end // [ 0,-1]
-                    {4'h1, 4'h0}: begin sym_cand = 2'd2; sym_out_valid <= 1'b1; end // [ 1, 0]
-                    {4'h0, 4'h1}: begin sym_cand = 2'd3; sym_out_valid <= 1'b1; end // [ 0, 1]
-                    default:      begin sym_cand = 2'd0; sym_out_valid <= 1'b0; pair_invalid_pulse <= 1'b1; pair_invalid_code <= {norm_nibble(t0), norm_nibble(t1)}; end
+                    {4'hF, 4'h0}: begin sym_cand = 2'd0; sym_out_valid <= 1'b1; prev_sym <= 2'd0; prev_sym_valid <= 1'b1; end // [-1, 0]
+                    {4'h0, 4'hF}: begin sym_cand = 2'd1; sym_out_valid <= 1'b1; prev_sym <= 2'd1; prev_sym_valid <= 1'b1; end // [ 0,-1]
+                    {4'h1, 4'h0}: begin sym_cand = 2'd2; sym_out_valid <= 1'b1; prev_sym <= 2'd2; prev_sym_valid <= 1'b1; end // [ 1, 0]
+                    {4'h0, 4'h1}: begin sym_cand = 2'd3; sym_out_valid <= 1'b1; prev_sym <= 2'd3; prev_sym_valid <= 1'b1; end // [ 0, 1]
+                    default: begin
+                        pair_invalid_pulse <= 1'b1;
+                        pair_invalid_code <= {norm_nibble(t0), norm_nibble(t1)};
+                        pair_correct_code <= {norm_nibble(t0), norm_nibble(t1)};
+                        if (ENABLE_PAIR_CORRECT != 0) begin
+                            case ({norm_nibble(t0), norm_nibble(t1)})
+                                8'hFF: begin
+                                    // Both samples collapsed toward L. Use the previous
+                                    // confirmed symbol phase to choose LM vs ML candidate.
+                                    sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
+                                    sym_out_valid <= 1'b1;
+                                    pair_correct_pulse <= 1'b1;
+                                    prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
+                                    prev_sym_valid <= 1'b1;
+                                end
+                                8'h11: begin
+                                    // Both samples collapsed toward H. Use the previous
+                                    // confirmed symbol phase to choose HM vs MH candidate.
+                                    sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
+                                    sym_out_valid <= 1'b1;
+                                    pair_correct_pulse <= 1'b1;
+                                    prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
+                                    prev_sym_valid <= 1'b1;
+                                end
+                                8'h00: begin
+                                    // Both samples collapsed to M. Keep the previous
+                                    // direction family when possible, otherwise reject.
+                                    if (prev_sym_valid) begin
+                                        case (prev_sym)
+                                            2'd0: sym_cand = 2'd0; // LM family
+                                            2'd1: sym_cand = 2'd1; // ML family
+                                            2'd2: sym_cand = 2'd2; // HM family
+                                            2'd3: sym_cand = 2'd3; // MH family
+                                            default: sym_cand = 2'd0;
+                                        endcase
+                                        sym_out_valid <= 1'b1;
+                                        pair_correct_pulse <= 1'b1;
+                                        prev_sym <= sym_cand;
+                                        prev_sym_valid <= 1'b1;
+                                    end else begin
+                                        sym_cand = 2'd0;
+                                        sym_out_valid <= 1'b0;
+                                        pair_correct_reject_pulse <= 1'b1;
+                                    end
+                                end
+                                default: begin
+                                    sym_cand = 2'd0;
+                                    sym_out_valid <= 1'b0;
+                                    pair_correct_reject_pulse <= 1'b1;
+                                end
+                            endcase
+                        end else begin
+                            sym_cand = 2'd0;
+                            sym_out_valid <= 1'b0;
+                        end
+                    end
                 endcase
                 sym_out       <= sym_cand;
                 pair_valid    <= 1'b0;

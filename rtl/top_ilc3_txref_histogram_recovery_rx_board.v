@@ -169,10 +169,13 @@ wire        sym_out_valid_w;
 wire [31:0] core_dbg_pairs;
 wire        pair_invalid_pulse_w;
 wire [7:0]  pair_invalid_code_w;
+wire        pair_correct_pulse_w;
+wire        pair_correct_reject_pulse_w;
+wire [7:0]  pair_correct_code_w;
 wire        sample_phase_dbg_w;
 wire        expected_tag_pair_w;
 
-ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
+ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4), .ENABLE_PAIR_CORRECT(1)) u_rx_core (
     .clk(sys_clk),
     .rst_n(rst_n),
     .frame_sync(frame_sync_q),
@@ -185,6 +188,9 @@ ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4)) u_rx_core (
     .dbg_pairs(core_dbg_pairs),
     .pair_invalid_pulse(pair_invalid_pulse_w),
     .pair_invalid_code(pair_invalid_code_w),
+    .pair_correct_pulse(pair_correct_pulse_w),
+    .pair_correct_reject_pulse(pair_correct_reject_pulse_w),
+    .pair_correct_code(pair_correct_code_w),
     .sample_phase_dbg(sample_phase_dbg_w)
 );
 
@@ -254,6 +260,10 @@ reg [31:0] lm_rule_err_cnt;
 reg [31:0] hm_rule_err_cnt;
 reg [31:0] mm_rule_err_cnt;
 reg [31:0] pair_risk_cnt;
+reg [31:0] pair_correct_candidate_cnt;
+reg [31:0] pair_correct_accept_cnt;
+reg [31:0] pair_correct_reject_cnt;
+reg [7:0]  pair_correct_last_code;
 reg [31:0] lm_rule_window_cnt;
 reg [31:0] hm_rule_window_cnt;
 reg [31:0] mm_rule_window_cnt;
@@ -309,6 +319,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         hm_rule_err_cnt <= 32'd0;
         mm_rule_err_cnt <= 32'd0;
         pair_risk_cnt <= 32'd0;
+        pair_correct_candidate_cnt <= 32'd0;
+        pair_correct_accept_cnt <= 32'd0;
+        pair_correct_reject_cnt <= 32'd0;
+        pair_correct_last_code <= 8'h00;
         lm_rule_window_cnt <= 32'd0;
         hm_rule_window_cnt <= 32'd0;
         mm_rule_window_cnt <= 32'd0;
@@ -377,6 +391,8 @@ always @(posedge sys_clk or negedge rst_n) begin
             pair_risk_window_cnt <= 32'd0;
         end else if (pair_invalid_pulse_w) begin
             pair_invalid_cnt <= pair_invalid_cnt + 32'd1;
+            pair_correct_candidate_cnt <= pair_correct_candidate_cnt + 32'd1;
+            pair_correct_last_code <= pair_correct_code_w;
             tag_seen_cnt <= tag_seen_cnt + 32'd1;
             if (expected_tag_pair_w) begin
                 tag_valid_cnt <= tag_valid_cnt + 32'd1;
@@ -398,6 +414,14 @@ always @(posedge sys_clk or negedge rst_n) begin
                     mm_rule_window_cnt <= mm_rule_window_cnt + 32'd1;
                 tag_reject_cnt <= tag_reject_cnt + 32'd1;
             end
+        end
+        if (pair_correct_pulse_w) begin
+            pair_correct_accept_cnt <= pair_correct_accept_cnt + 32'd1;
+            pair_correct_last_code <= pair_correct_code_w;
+        end
+        if (pair_correct_reject_pulse_w) begin
+            pair_correct_reject_cnt <= pair_correct_reject_cnt + 32'd1;
+            pair_correct_last_code <= pair_correct_code_w;
         end
 
         if (sym_out_valid_w) begin
@@ -543,7 +567,7 @@ endfunction
 //   RM = max recovery latency in sys_clk cycles
 //   RA = accumulated recovery latency in sys_clk cycles, avg = RA / RC
 // Short latency log for timing margin:
-// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX\r\n"
+// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX\r\n"
 function [7:0] log_char;
     input [8:0] ptr;
     input [31:0] pk;
@@ -582,6 +606,10 @@ function [7:0] log_char;
     input [31:0] hm;
     input [31:0] mm;
     input [31:0] pr;
+    input [31:0] pc;
+    input [31:0] pa;
+    input [31:0] pj;
+    input [7:0]  pl;
     begin
         case (ptr)
             8'd0: log_char="I"; 8'd1: log_char="L"; 8'd2: log_char="C"; 8'd3: log_char="3"; 8'd4: log_char="H"; 8'd5: log_char="S"; 8'd6: log_char="T"; 8'd7: log_char=" ";
@@ -609,7 +637,11 @@ function [7:0] log_char;
             9'd248: log_char="M"; 9'd249: log_char="M"; 9'd250: log_char="="; 9'd251: log_char=nibble_ascii(mm[31:28]); 9'd252: log_char=nibble_ascii(mm[27:24]); 9'd253: log_char=nibble_ascii(mm[23:20]); 9'd254: log_char=nibble_ascii(mm[19:16]); 9'd255: log_char=nibble_ascii(mm[15:12]); 9'd256: log_char=nibble_ascii(mm[11:8]); 9'd257: log_char=nibble_ascii(mm[7:4]); 9'd258: log_char=nibble_ascii(mm[3:0]); 9'd259: log_char=" ";
             9'd260: log_char="P"; 9'd261: log_char="R"; 9'd262: log_char="="; 9'd263: log_char=nibble_ascii(pr[31:28]); 9'd264: log_char=nibble_ascii(pr[27:24]); 9'd265: log_char=nibble_ascii(pr[23:20]); 9'd266: log_char=nibble_ascii(pr[19:16]); 9'd267: log_char=nibble_ascii(pr[15:12]); 9'd268: log_char=nibble_ascii(pr[11:8]); 9'd269: log_char=nibble_ascii(pr[7:4]); 9'd270: log_char=nibble_ascii(pr[3:0]); 9'd271: log_char=" ";
             9'd272: log_char="L"; 9'd273: log_char="V"; 9'd274: log_char="="; 9'd275: log_char=nibble_ascii(lv); 9'd276: log_char=" ";
-            9'd277: log_char="S"; 9'd278: log_char="C"; 9'd279: log_char="="; 9'd280: log_char=nibble_ascii(sc[7:4]); 9'd281: log_char=nibble_ascii(sc[3:0]); 9'd282: log_char=8'h0D; 9'd283: log_char=8'h0A;
+            9'd277: log_char="S"; 9'd278: log_char="C"; 9'd279: log_char="="; 9'd280: log_char=nibble_ascii(sc[7:4]); 9'd281: log_char=nibble_ascii(sc[3:0]); 9'd282: log_char=" ";
+            9'd283: log_char="P"; 9'd284: log_char="C"; 9'd285: log_char="="; 9'd286: log_char=nibble_ascii(pc[31:28]); 9'd287: log_char=nibble_ascii(pc[27:24]); 9'd288: log_char=nibble_ascii(pc[23:20]); 9'd289: log_char=nibble_ascii(pc[19:16]); 9'd290: log_char=nibble_ascii(pc[15:12]); 9'd291: log_char=nibble_ascii(pc[11:8]); 9'd292: log_char=nibble_ascii(pc[7:4]); 9'd293: log_char=nibble_ascii(pc[3:0]); 9'd294: log_char=" ";
+            9'd295: log_char="P"; 9'd296: log_char="A"; 9'd297: log_char="="; 9'd298: log_char=nibble_ascii(pa[31:28]); 9'd299: log_char=nibble_ascii(pa[27:24]); 9'd300: log_char=nibble_ascii(pa[23:20]); 9'd301: log_char=nibble_ascii(pa[19:16]); 9'd302: log_char=nibble_ascii(pa[15:12]); 9'd303: log_char=nibble_ascii(pa[11:8]); 9'd304: log_char=nibble_ascii(pa[7:4]); 9'd305: log_char=nibble_ascii(pa[3:0]); 9'd306: log_char=" ";
+            9'd307: log_char="P"; 9'd308: log_char="J"; 9'd309: log_char="="; 9'd310: log_char=nibble_ascii(pj[31:28]); 9'd311: log_char=nibble_ascii(pj[27:24]); 9'd312: log_char=nibble_ascii(pj[23:20]); 9'd313: log_char=nibble_ascii(pj[19:16]); 9'd314: log_char=nibble_ascii(pj[15:12]); 9'd315: log_char=nibble_ascii(pj[11:8]); 9'd316: log_char=nibble_ascii(pj[7:4]); 9'd317: log_char=nibble_ascii(pj[3:0]); 9'd318: log_char=" ";
+            9'd319: log_char="P"; 9'd320: log_char="L"; 9'd321: log_char="="; 9'd322: log_char=nibble_ascii(pl[7:4]); 9'd323: log_char=nibble_ascii(pl[3:0]); 9'd324: log_char=8'h0D; 9'd325: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
@@ -627,6 +659,8 @@ reg [31:0] log_dh, log_dm, log_dl, log_di, log_db, log_dd;
 reg [31:0] log_df, log_rc, log_rd;
 reg [31:0] log_txh, log_txt, log_txo;
 reg [31:0] log_lm, log_hm, log_mm, log_pr;
+reg [31:0] log_pc, log_pa, log_pj;
+reg [7:0]  log_pl;
 reg [31:0] prev_hc, prev_mc, prev_lc, prev_ic;
 reg [31:0] prev_pkt_cnt, prev_resync_drop_cnt, prev_partial_drop_cnt;
 reg [31:0] prev_pkt_ng_cnt, prev_byte_err_cnt, prev_crc_err_cnt;
@@ -731,6 +765,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         log_df <= 32'd0; log_rc <= 32'd0; log_rd <= 32'd0;
         log_txh <= 32'd0; log_txt <= 32'd0; log_txo <= 32'd0;
         log_lm <= 32'd0; log_hm <= 32'd0; log_mm <= 32'd0; log_pr <= 32'd0;
+        log_pc <= 32'd0; log_pa <= 32'd0; log_pj <= 32'd0; log_pl <= 8'h00;
         prev_hc <= 32'd0; prev_mc <= 32'd0; prev_lc <= 32'd0; prev_ic <= 32'd0;
         prev_pkt_cnt <= 32'd0; prev_resync_drop_cnt <= 32'd0; prev_partial_drop_cnt <= 32'd0;
         prev_pkt_ng_cnt <= 32'd0; prev_byte_err_cnt <= 32'd0; prev_crc_err_cnt <= 32'd0;
@@ -902,6 +937,10 @@ always @(posedge sys_clk or negedge rst_n) begin
                 log_mm <= mm_rule_err_cnt;
                 log_pr <= pair_risk_cnt;
             end
+            log_pc <= pair_correct_candidate_cnt;
+            log_pa <= pair_correct_accept_cnt;
+            log_pj <= pair_correct_reject_cnt;
+            log_pl <= pair_correct_last_code;
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
@@ -936,9 +975,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr);
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl);
             uart_start <= 1'b1;
-            if (log_ptr == 9'd283) log_active <= 1'b0;
+            if (log_ptr == 9'd325) log_active <= 1'b0;
             else log_ptr <= log_ptr + 9'd1;
         end
     end
