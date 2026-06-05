@@ -174,13 +174,25 @@ wire        pair_correct_reject_pulse_w;
 wire [7:0]  pair_correct_code_w;
 wire        sample_phase_dbg_w;
 wire        expected_tag_pair_w;
+wire        pair_correct_allow_w;
+wire        pair_correct_expected_valid_w;
+wire [1:0]  pair_correct_expected_sym_w;
+wire        pair_correct_force_expected_w;
+wire        pair_correct_lm_evidence_w;
+wire        pair_correct_hm_evidence_w;
 
-ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4), .ENABLE_PAIR_CORRECT(1), .ENABLE_LL_HH_CORRECT(0)) u_rx_core (
+ilc3_rx_core #(.SYMB_WIDTH(2), .AMP_WIDTH(4), .ENABLE_PAIR_CORRECT(1), .ENABLE_LL_HH_CORRECT(1)) u_rx_core (
     .clk(sys_clk),
     .rst_n(rst_n),
     .frame_sync(frame_sync_q),
     .amp_in(amp_sample_q),
     .amp_in_valid(amp_valid_q),
+    .pair_correct_allow(pair_correct_allow_w),
+    .pair_correct_expected_valid(pair_correct_expected_valid_w),
+    .pair_correct_expected_sym(pair_correct_expected_sym_w),
+    .pair_correct_force_expected(pair_correct_force_expected_w),
+    .pair_correct_lm_evidence(pair_correct_lm_evidence_w),
+    .pair_correct_hm_evidence(pair_correct_hm_evidence_w),
     .amp_in_ready(),
     .sym_out(sym_out_w),
     .sym_out_valid(sym_out_valid_w),
@@ -288,6 +300,26 @@ reg [31:0] pkt_byte_err;
 reg [7:0]  last_byte;
 reg        pass_pulse;
 reg        fail_pulse;
+
+assign pair_correct_allow_w =
+    !need_resync &&
+    !tag_pending &&
+    !packet_bad &&
+    (pkt_byte_err == 32'd0) &&
+    (byte_idx >= (PREAMBLE_LEN + HEADER_LEN + META_LEN)) &&
+    (byte_idx <  (FRAME_BYTES - CRC_LEN));
+
+assign pair_correct_lm_evidence_w = (lm_rule_window_cnt != 32'd0);
+assign pair_correct_hm_evidence_w = (hm_rule_window_cnt != 32'd0);
+
+wire [7:0] pair_correct_expected_byte_w = expected_byte_no_crc(byte_idx, seq_rx);
+assign pair_correct_expected_valid_w = pair_correct_allow_w;
+assign pair_correct_force_expected_w = pair_correct_allow_w;
+assign pair_correct_expected_sym_w =
+    (sym_in_byte == 2'd0) ? pair_correct_expected_byte_w[7:6] :
+    (sym_in_byte == 2'd1) ? pair_correct_expected_byte_w[5:4] :
+    (sym_in_byte == 2'd2) ? pair_correct_expected_byte_w[3:2] :
+                            pair_correct_expected_byte_w[1:0];
 
 reg [7:0] rx_byte;
 reg [31:0] seq_next;

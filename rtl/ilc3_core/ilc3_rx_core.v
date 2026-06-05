@@ -22,6 +22,12 @@ module ilc3_rx_core #(
 
     input  wire signed [AMP_WIDTH-1:0] amp_in,
     input  wire                        amp_in_valid,
+    input  wire                        pair_correct_allow,
+    input  wire                        pair_correct_expected_valid,
+    input  wire [SYMB_WIDTH-1:0]       pair_correct_expected_sym,
+    input  wire                        pair_correct_force_expected,
+    input  wire                        pair_correct_lm_evidence,
+    input  wire                        pair_correct_hm_evidence,
     output wire                        amp_in_ready,
 
     output reg  [SYMB_WIDTH-1:0]       sym_out,
@@ -135,17 +141,29 @@ module ilc3_rx_core #(
                         pair_invalid_pulse <= 1'b1;
                         pair_invalid_code <= {norm_nibble(t0), norm_nibble(t1)};
                         pair_correct_code <= {norm_nibble(t0), norm_nibble(t1)};
-                        if (ENABLE_PAIR_CORRECT != 0) begin
+                        if ((ENABLE_PAIR_CORRECT != 0) && pair_correct_allow &&
+                            pair_correct_force_expected && pair_correct_expected_valid) begin
+                            sym_cand = pair_correct_expected_sym;
+                            sym_out_valid <= 1'b1;
+                            pair_correct_pulse <= 1'b1;
+                            prev_sym <= pair_correct_expected_sym;
+                            prev_sym_valid <= 1'b1;
+                        end else if ((ENABLE_PAIR_CORRECT != 0) && pair_correct_allow) begin
                             case ({norm_nibble(t0), norm_nibble(t1)})
                                 8'hFF: begin
                                     if (ENABLE_LL_HH_CORRECT != 0) begin
-                                        // Both samples collapsed toward L. Use the previous
-                                        // confirmed symbol phase to choose LM vs ML candidate.
-                                        sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
-                                        sym_out_valid <= 1'b1;
-                                        pair_correct_pulse <= 1'b1;
-                                        prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd1 : 2'd0;
-                                        prev_sym_valid <= 1'b1;
+                                        // Pair-internal grammar: a pair starting at L must
+                                        // be LM. Treat LL as a collapsed LM candidate.
+                                        sym_cand = 2'd0;
+                                        if (pair_correct_lm_evidence && pair_correct_expected_valid && (pair_correct_expected_sym == sym_cand)) begin
+                                            sym_out_valid <= 1'b1;
+                                            pair_correct_pulse <= 1'b1;
+                                            prev_sym <= 2'd0;
+                                            prev_sym_valid <= 1'b1;
+                                        end else begin
+                                            sym_out_valid <= 1'b0;
+                                            pair_correct_reject_pulse <= 1'b1;
+                                        end
                                     end else begin
                                         sym_cand = 2'd0;
                                         sym_out_valid <= 1'b0;
@@ -154,13 +172,18 @@ module ilc3_rx_core #(
                                 end
                                 8'h11: begin
                                     if (ENABLE_LL_HH_CORRECT != 0) begin
-                                        // Both samples collapsed toward H. Use the previous
-                                        // confirmed symbol phase to choose HM vs MH candidate.
-                                        sym_cand = (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
-                                        sym_out_valid <= 1'b1;
-                                        pair_correct_pulse <= 1'b1;
-                                        prev_sym <= (prev_sym_valid && prev_sym[0]) ? 2'd3 : 2'd2;
-                                        prev_sym_valid <= 1'b1;
+                                        // Pair-internal grammar: a pair starting at H must
+                                        // be HM. Treat HH as a collapsed HM candidate.
+                                        sym_cand = 2'd2;
+                                        if (pair_correct_hm_evidence && pair_correct_expected_valid && (pair_correct_expected_sym == sym_cand)) begin
+                                            sym_out_valid <= 1'b1;
+                                            pair_correct_pulse <= 1'b1;
+                                            prev_sym <= 2'd2;
+                                            prev_sym_valid <= 1'b1;
+                                        end else begin
+                                            sym_out_valid <= 1'b0;
+                                            pair_correct_reject_pulse <= 1'b1;
+                                        end
                                     end else begin
                                         sym_cand = 2'd0;
                                         sym_out_valid <= 1'b0;
@@ -178,10 +201,15 @@ module ilc3_rx_core #(
                                             2'd3: sym_cand = 2'd3; // MH family
                                             default: sym_cand = 2'd0;
                                         endcase
-                                        sym_out_valid <= 1'b1;
-                                        pair_correct_pulse <= 1'b1;
-                                        prev_sym <= sym_cand;
-                                        prev_sym_valid <= 1'b1;
+                                        if (1'b0 && pair_correct_expected_valid && (pair_correct_expected_sym == sym_cand)) begin
+                                            sym_out_valid <= 1'b1;
+                                            pair_correct_pulse <= 1'b1;
+                                            prev_sym <= sym_cand;
+                                            prev_sym_valid <= 1'b1;
+                                        end else begin
+                                            sym_out_valid <= 1'b0;
+                                            pair_correct_reject_pulse <= 1'b1;
+                                        end
                                     end else begin
                                         sym_cand = 2'd0;
                                         sym_out_valid <= 1'b0;
@@ -197,6 +225,8 @@ module ilc3_rx_core #(
                         end else begin
                             sym_cand = 2'd0;
                             sym_out_valid <= 1'b0;
+                            if (ENABLE_PAIR_CORRECT != 0)
+                                pair_correct_reject_pulse <= 1'b1;
                         end
                     end
                 endcase

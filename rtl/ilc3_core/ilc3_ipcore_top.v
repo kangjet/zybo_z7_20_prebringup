@@ -180,6 +180,12 @@ module ilc3_ipcore_top #(
         // PHY에서 들어오는 진폭 코드
         .amp_in       (rx_amp_to_core),
         .amp_in_valid (rx_amp_valid),
+        .pair_correct_allow(1'b1),
+        .pair_correct_expected_valid(1'b1),
+        .pair_correct_expected_sym({SYMB_WIDTH{1'b0}}),
+        .pair_correct_force_expected(1'b0),
+        .pair_correct_lm_evidence(1'b1),
+        .pair_correct_hm_evidence(1'b1),
         .amp_in_ready (rx_amp_ready),
 
         // 상위로 내보내는 복원 심볼
