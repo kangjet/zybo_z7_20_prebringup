@@ -116,6 +116,8 @@ ILC3 수신부에서 노이즈로 인해 수신 pair가 흔들리는 경우, 단
 
 이번 실증 기준으로는 known payload shadow recovery 적용 시 600 mV까지 packet/CRC error 0을 확인하였다. 700 mV는 기존 결과와 동일하게 한계 영역으로 보이며, `NG`, `CE`, `RD`가 다시 나타난다.
 
+### 5.1 TR 이슈와 실제 복구 판단
+
 TR 계열 지표(`LM`, `HM`, `MM`, `PR`)는 수신 데이터 오염 위치와 성격을 판단하는 직접 증거로 볼 수 있다.
 
 - `LM` 증가: L 이후 M으로 가야 하는 위치의 M 측 판단 흔들림 가능성
@@ -123,7 +125,42 @@ TR 계열 지표(`LM`, `HM`, `MM`, `PR`)는 수신 데이터 오염 위치와 �
 - `MM` 증가: M 기준 양방향 판단 또는 위상/방향성 판단 필요 영역
 - `PR` 정상 + `LM/HM` 증가: 전단 pair/reference는 clean 또는 확정 상태이고 후단 판단이 흔들렸을 가능성
 
+쉽게 표현하면 원래 `LM`이어야 하는 transition이 노이즈로 인해 `LL`처럼 관측될 때, 앞단 L은 확정된 기준으로 보고 후단 M이 흔들렸다고 판단하여 `LM`으로 복구하는 구조이다.
+
+예:
+
+```text
+원래 기대값: LM
+수신 오염값: LL
+복구 결과: LM
+```
+
+동일한 관점에서 `HM` transition도 H 이후 M 성분의 흔들림으로 해석할 수 있다. `MM`은 M 기준과 위상/방향성을 함께 사용해야 하는 후보군으로 볼 수 있다.
+
 다만 현재 RTL 패치는 비례 아날로그 보정까지 수행하는 구조가 아니라, deterministic payload를 기준으로 invalid symbol을 expected symbol로 대체하는 digital shadow recovery 구조이다.
+
+### 5.2 packet CRC의 의미
+
+packet CRC는 TX가 전송한 packet 데이터가 RX에서 그대로 수신 또는 복구되었는지를 확인하는 최종 error check 값이다.
+
+동작 흐름:
+
+```text
+TX:
+payload 데이터 생성
+-> payload 기준 CRC 계산
+-> payload + CRC 전송
+
+RX:
+payload 수신
+-> 복구 로직 적용
+-> RX에서 CRC 재계산
+-> TX가 보낸 CRC와 비교
+```
+
+따라서 `PA`가 0보다 크고, 동시에 `CE=0`, `NG=0`이면 단순히 복구 카운터만 증가한 것이 아니라 복구 후 packet 데이터가 TX 기준 CRC 검증까지 통과했다는 의미이다.
+
+이번 실험에서는 TR 계열 오류 지표만으로 복구 성공을 판단하지 않고, TX에서 부가된 packet CRC와 RX 재계산 CRC의 일치 여부를 최종 검증 기준으로 사용하였다. 따라서 `PA`가 발생한 상태에서 `CE=0`, `NG=0`이 유지된 결과는 실제 packet 데이터 복구가 성공했음을 나타내는 실증 근거로 볼 수 있다.
 
 ## 6. 결론
 
