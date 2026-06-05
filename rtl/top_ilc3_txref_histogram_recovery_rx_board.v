@@ -57,9 +57,10 @@ localparam [31:0] DM_LOW_TH  = 32'd10678;
 localparam [31:0] DL_MIN_TH  = 32'd2921;
 localparam [31:0] DM_DEFER_DD_TH = 32'd1460;
 localparam [31:0] DM_RECOVER_DD_TH = 32'd183;
-// Packet-local DM thresholds, scaled from the 32768-sample long-DM
-// thresholds to one 274-byte packet (1096 ILC3 symbols, 2192 raw samples).
-localparam [31:0] PKT_DM_DEFER_DD_TH = 32'd98;
+// Packet-local DM threshold. Keep this conservative: the packet window is
+// aligned to decoded packet activity, while long-DM remains the sensitive
+// line-health monitor.
+localparam [31:0] PKT_DM_DEFER_DD_TH = 32'd512;
 localparam [31:0] PKT_DM_MIN_SAMPLES = 32'd1024;
 localparam [31:0] TR_FAST_HM_TH = 32'd2048;
 localparam [31:0] TR_FAST_PR_TH = 32'd4096;
@@ -365,13 +366,22 @@ always @(posedge sys_clk or negedge rst_n) begin
     end else begin
         pkt_dm_defer_pulse <= 1'b0;
         if (sync_rise || rx_soft_recover_q) begin
-            pkt_dm_active_q <= 1'b1;
+            pkt_dm_active_q <= 1'b0;
             pkt_dm_high_cnt <= 32'd0;
             pkt_dm_mid_cnt <= 32'd0;
             pkt_dm_low_cnt <= 32'd0;
             pkt_dm_invalid_cnt <= 32'd0;
             pkt_dm_sample_cnt <= 32'd0;
         end else begin
+            if (sym_out_valid_w && need_resync) begin
+                pkt_dm_active_q <= 1'b1;
+                pkt_dm_high_cnt <= 32'd0;
+                pkt_dm_mid_cnt <= 32'd0;
+                pkt_dm_low_cnt <= 32'd0;
+                pkt_dm_invalid_cnt <= 32'd0;
+                pkt_dm_sample_cnt <= 32'd0;
+            end
+
             if (pkt_dm_active_q && amp_valid_q) begin
                 pkt_dm_sample_cnt <= pkt_dm_sample_cnt + 32'd1;
                 case (cmp_s2)
