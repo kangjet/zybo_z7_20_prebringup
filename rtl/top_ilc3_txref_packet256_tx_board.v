@@ -56,6 +56,7 @@ localparam integer TAG_GROUPS_PER_FRAME =
 localparam integer TAG_SAMPLES_PER_FRAME = TAG_GROUPS_PER_FRAME * TAG_PAIR_COUNT * 2;
 localparam [15:0] TX_TAG_SAMPLES_PER_FRAME = TAG_SAMPLES_PER_FRAME;
 localparam integer RTX_BIT_CLKS = 1024;
+localparam integer RTX_START_SAMPLE_CLKS = RTX_BIT_CLKS + (RTX_BIT_CLKS / 2);
 localparam [12:0] RTX_ACK_HOLD_COUNT = 13'd4096;
 
 reg [2:0] rst_sr = 3'b000;
@@ -149,6 +150,7 @@ reg        cur_is_replay;
 (* ASYNC_REG = "TRUE" *) reg rtx_req_s1, rtx_req_s2, rtx_req_s3;
 (* ASYNC_REG = "TRUE" *) reg rtx_seq_s1, rtx_seq_s2;
 reg        rtx_rx_active_q;
+reg        rtx_first_sample_q;
 reg [10:0] rtx_bit_timer_q;
 reg [5:0]  rtx_bit_idx_q;
 reg [31:0] rtx_seq_shift_q;
@@ -247,6 +249,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_seq_s1 <= 1'b0;
         rtx_seq_s2 <= 1'b0;
         rtx_rx_active_q <= 1'b0;
+        rtx_first_sample_q <= 1'b0;
         rtx_bit_timer_q <= 11'd0;
         rtx_bit_idx_q <= 6'd0;
         rtx_seq_shift_q <= 32'd0;
@@ -279,18 +282,20 @@ always @(posedge sys_clk or negedge rst_n) begin
         end
         if (rtx_req_rise_w && !rtx_rx_active_q) begin
             rtx_rx_active_q <= 1'b1;
-            rtx_bit_timer_q <= (RTX_BIT_CLKS / 2);
+            rtx_first_sample_q <= 1'b1;
+            rtx_bit_timer_q <= 11'd0;
             rtx_bit_idx_q <= 6'd0;
             rtx_seq_shift_q <= 32'd0;
             rtx_req_cnt_q <= rtx_req_cnt_q + 32'd1;
         end else if (rtx_rx_active_q) begin
-            if (rtx_bit_timer_q == RTX_BIT_CLKS - 1) begin
+            if (rtx_bit_timer_q == (rtx_first_sample_q ? (RTX_START_SAMPLE_CLKS - 1) : (RTX_BIT_CLKS - 1))) begin
                 rtx_bit_timer_q <= 11'd0;
-                rtx_seq_shift_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
+                rtx_first_sample_q <= 1'b0;
+                rtx_seq_shift_q <= {rtx_seq_shift_q[30:0], rtx_req_s2};
                 if (rtx_bit_idx_q == 6'd31) begin
                     rtx_rx_active_q <= 1'b0;
-                    rtx_replay_seq_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
-                    rtx_last_seq_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
+                    rtx_replay_seq_q <= {rtx_seq_shift_q[30:0], rtx_req_s2};
+                    rtx_last_seq_q <= {rtx_seq_shift_q[30:0], rtx_req_s2};
                     rtx_replay_pending_q <= 1'b1;
                     rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
                     rtx_ack_hold_cnt_q <= RTX_ACK_HOLD_COUNT;

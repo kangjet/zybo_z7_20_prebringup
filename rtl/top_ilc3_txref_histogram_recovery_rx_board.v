@@ -1075,13 +1075,15 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (rtx_tx_active_q) begin
             if (rtx_tx_bit_timer_q == RTX_BIT_CLKS - 1) begin
                 rtx_tx_bit_timer_q <= 11'd0;
-                if (rtx_tx_bit_idx_q == 6'd31) begin
+                if (rtx_tx_bit_idx_q == 6'd32) begin
                     rtx_tx_active_q <= 1'b0;
                     rtx_req_out <= 1'b0;
                     rtx_seq_out <= 1'b0;
+                    rtx_wait_accept_q <= 1'b1;
                 end else begin
                     rtx_tx_bit_idx_q <= rtx_tx_bit_idx_q + 6'd1;
-                    rtx_seq_out <= rtx_tx_seq_q[30];
+                    rtx_req_out <= rtx_tx_seq_q[31];
+                    rtx_seq_out <= rtx_tx_seq_q[31];
                     rtx_tx_seq_q <= {rtx_tx_seq_q[30:0], 1'b0};
                 end
             end else begin
@@ -1096,7 +1098,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rtx_tx_active_q <= 1'b1;
                 rtx_tx_bit_timer_q <= 11'd0;
                 rtx_tx_bit_idx_q <= 6'd0;
-                rtx_tx_seq_q <= {rtx_orig_seq_q[30:0], 1'b0};
+                rtx_tx_seq_q <= rtx_orig_seq_q;
                 rtx_req_out <= 1'b1;
                 rtx_seq_out <= rtx_orig_seq_q[31];
                 rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
@@ -1117,7 +1119,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rtx_tx_active_q <= 1'b1;
                 rtx_tx_bit_timer_q <= 11'd0;
                 rtx_tx_bit_idx_q <= 6'd0;
-                rtx_tx_seq_q <= {rtx_orig_seq_q[30:0], 1'b0};
+                rtx_tx_seq_q <= rtx_orig_seq_q;
                 rtx_req_out <= 1'b1;
                 rtx_seq_out <= rtx_orig_seq_q[31];
                 rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
