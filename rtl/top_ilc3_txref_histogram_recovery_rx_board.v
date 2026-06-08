@@ -898,6 +898,7 @@ reg [31:0] rtx_match_cnt_q;
 reg [31:0] rtx_fail_cnt_q;
 reg [31:0] rtx_last_latency_q;
 reg        rtx_tx_active_q;
+reg        rtx_ack_wait_q;
 reg [10:0] rtx_tx_bit_timer_q;
 reg [5:0]  rtx_tx_bit_idx_q;
 reg [31:0] rtx_tx_seq_q;
@@ -1039,6 +1040,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_fail_cnt_q <= 32'd0;
         rtx_last_latency_q <= 32'd0;
         rtx_tx_active_q <= 1'b0;
+        rtx_ack_wait_q <= 1'b0;
         rtx_tx_bit_timer_q <= 11'd0;
         rtx_tx_bit_idx_q <= 6'd0;
         rtx_tx_seq_q <= 32'd0;
@@ -1061,9 +1063,10 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_ack_s1 <= rtx_ack_in;
         rtx_ack_s2 <= rtx_ack_s1;
         rtx_ack_s3 <= rtx_ack_s2;
-        if (rtx_ack_rise_w) begin
+        if (rtx_ack_rise_w && rtx_ack_wait_q) begin
             rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
             rtx_wait_accept_q <= 1'b1;
+            rtx_ack_wait_q <= 1'b0;
         end
         if (rtx_tx_active_q) begin
             if (rtx_tx_bit_timer_q == RTX_BIT_CLKS - 1) begin
@@ -1100,6 +1103,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rtx_seq_out <= rtx_orig_seq_q[31];
                 rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
                 rtx_req_cycle_q <= latency_cycle_cnt;
+                rtx_ack_wait_q <= 1'b1;
                 rtx_wait_accept_q <= 1'b0;
             end
         end
