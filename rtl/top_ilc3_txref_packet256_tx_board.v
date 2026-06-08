@@ -463,9 +463,31 @@ function [7:0] log_char;
     end
 endfunction
 
+// "ILC3TRX RQ=XXXXXXXX AK=XXXXXXXX RP=XXXXXXXX SQ=XXXXXXXX\r\n"
+function [7:0] rtx_log_char;
+    input [5:0] ptr;
+    input [31:0] rq;
+    input [31:0] ak;
+    input [31:0] rp;
+    input [31:0] sq;
+    begin
+        case (ptr)
+            6'd0: rtx_log_char="I"; 6'd1: rtx_log_char="L"; 6'd2: rtx_log_char="C"; 6'd3: rtx_log_char="3";
+            6'd4: rtx_log_char="T"; 6'd5: rtx_log_char="R"; 6'd6: rtx_log_char="X"; 6'd7: rtx_log_char=" ";
+            6'd8: rtx_log_char="R"; 6'd9: rtx_log_char="Q"; 6'd10: rtx_log_char="="; 6'd11: rtx_log_char=nibble_ascii(rq[31:28]); 6'd12: rtx_log_char=nibble_ascii(rq[27:24]); 6'd13: rtx_log_char=nibble_ascii(rq[23:20]); 6'd14: rtx_log_char=nibble_ascii(rq[19:16]); 6'd15: rtx_log_char=nibble_ascii(rq[15:12]); 6'd16: rtx_log_char=nibble_ascii(rq[11:8]); 6'd17: rtx_log_char=nibble_ascii(rq[7:4]); 6'd18: rtx_log_char=nibble_ascii(rq[3:0]); 6'd19: rtx_log_char=" ";
+            6'd20: rtx_log_char="A"; 6'd21: rtx_log_char="K"; 6'd22: rtx_log_char="="; 6'd23: rtx_log_char=nibble_ascii(ak[31:28]); 6'd24: rtx_log_char=nibble_ascii(ak[27:24]); 6'd25: rtx_log_char=nibble_ascii(ak[23:20]); 6'd26: rtx_log_char=nibble_ascii(ak[19:16]); 6'd27: rtx_log_char=nibble_ascii(ak[15:12]); 6'd28: rtx_log_char=nibble_ascii(ak[11:8]); 6'd29: rtx_log_char=nibble_ascii(ak[7:4]); 6'd30: rtx_log_char=nibble_ascii(ak[3:0]); 6'd31: rtx_log_char=" ";
+            6'd32: rtx_log_char="R"; 6'd33: rtx_log_char="P"; 6'd34: rtx_log_char="="; 6'd35: rtx_log_char=nibble_ascii(rp[31:28]); 6'd36: rtx_log_char=nibble_ascii(rp[27:24]); 6'd37: rtx_log_char=nibble_ascii(rp[23:20]); 6'd38: rtx_log_char=nibble_ascii(rp[19:16]); 6'd39: rtx_log_char=nibble_ascii(rp[15:12]); 6'd40: rtx_log_char=nibble_ascii(rp[11:8]); 6'd41: rtx_log_char=nibble_ascii(rp[7:4]); 6'd42: rtx_log_char=nibble_ascii(rp[3:0]); 6'd43: rtx_log_char=" ";
+            6'd44: rtx_log_char="S"; 6'd45: rtx_log_char="Q"; 6'd46: rtx_log_char="="; 6'd47: rtx_log_char=nibble_ascii(sq[31:28]); 6'd48: rtx_log_char=nibble_ascii(sq[27:24]); 6'd49: rtx_log_char=nibble_ascii(sq[23:20]); 6'd50: rtx_log_char=nibble_ascii(sq[19:16]); 6'd51: rtx_log_char=nibble_ascii(sq[15:12]); 6'd52: rtx_log_char=nibble_ascii(sq[11:8]); 6'd53: rtx_log_char=nibble_ascii(sq[7:4]); 6'd54: rtx_log_char=nibble_ascii(sq[3:0]);
+            6'd55: rtx_log_char=8'h0D; 6'd56: rtx_log_char=8'h0A;
+            default: rtx_log_char=8'h00;
+        endcase
+    end
+endfunction
+
 reg [26:0] sec_cnt;
 reg [31:0] log_pkt_cnt, log_sample_cnt, log_dbg;
 reg [31:0] log_th, log_tm, log_tl, log_tt;
+reg [31:0] log_rtx_rq, log_rtx_ak, log_rtx_rp, log_rtx_sq;
 reg [31:0] prev_tx_high_cnt, prev_tx_mid_cnt, prev_tx_low_cnt, prev_tx_tag_sample_cnt;
 reg        log_req;
 
@@ -473,6 +495,7 @@ always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         sec_cnt <= 27'd0; log_pkt_cnt <= 32'd0; log_sample_cnt <= 32'd0; log_dbg <= 32'd0;
         log_th <= 32'd0; log_tm <= 32'd0; log_tl <= 32'd0; log_tt <= 32'd0;
+        log_rtx_rq <= 32'd0; log_rtx_ak <= 32'd0; log_rtx_rp <= 32'd0; log_rtx_sq <= 32'd0;
         prev_tx_high_cnt <= 32'd0; prev_tx_mid_cnt <= 32'd0; prev_tx_low_cnt <= 32'd0; prev_tx_tag_sample_cnt <= 32'd0;
         log_req <= 1'b0;
     end else begin
@@ -486,6 +509,10 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_tm <= tx_mid_cnt - prev_tx_mid_cnt;
             log_tl <= tx_low_cnt - prev_tx_low_cnt;
             log_tt <= tx_tag_sample_cnt - prev_tx_tag_sample_cnt;
+            log_rtx_rq <= rtx_req_cnt_q;
+            log_rtx_ak <= rtx_ack_cnt_q;
+            log_rtx_rp <= rtx_replay_cnt_q;
+            log_rtx_sq <= rtx_last_seq_q;
             prev_tx_high_cnt <= tx_high_cnt;
             prev_tx_mid_cnt <= tx_mid_cnt;
             prev_tx_low_cnt <= tx_low_cnt;
@@ -499,22 +526,32 @@ end
 
 reg [6:0] log_ptr;
 reg       log_active;
+reg       log_rtx_mode;
 reg       uart_start;
 reg [7:0] uart_data;
 wire      uart_busy;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
-        log_ptr <= 7'd0; log_active <= 1'b0; uart_start <= 1'b0; uart_data <= 8'h00;
+        log_ptr <= 7'd0; log_active <= 1'b0; log_rtx_mode <= 1'b0; uart_start <= 1'b0; uart_data <= 8'h00;
     end else begin
         uart_start <= 1'b0;
         if (log_req && !log_active && !uart_busy) begin
-            log_active <= 1'b1; log_ptr <= 7'd0;
+            log_active <= 1'b1; log_rtx_mode <= 1'b0; log_ptr <= 7'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pkt_cnt, log_sample_cnt, log_dbg, log_th, log_tm, log_tl, log_tt);
+            uart_data <= log_rtx_mode ?
+                         rtx_log_char(log_ptr[5:0], log_rtx_rq, log_rtx_ak, log_rtx_rp, log_rtx_sq) :
+                         log_char(log_ptr, log_pkt_cnt, log_sample_cnt, log_dbg, log_th, log_tm, log_tl, log_tt);
             uart_start <= 1'b1;
-            if (log_ptr == 7'd92) log_active <= 1'b0;
-            else log_ptr <= log_ptr + 7'd1;
+            if (!log_rtx_mode && (log_ptr == 7'd92)) begin
+                log_rtx_mode <= 1'b1;
+                log_ptr <= 7'd0;
+            end else if (log_rtx_mode && (log_ptr == 7'd56)) begin
+                log_active <= 1'b0;
+                log_rtx_mode <= 1'b0;
+            end else begin
+                log_ptr <= log_ptr + 7'd1;
+            end
         end
     end
 end

@@ -75,6 +75,7 @@ localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
 localparam [7:0] SELF_CORRECT_MIN_DELAY_8 = SELF_CORRECT_MIN_DELAY;
 localparam [7:0] SELF_CORRECT_MAX_DELAY_8 = SELF_CORRECT_MAX_DELAY;
 localparam integer RTX_BIT_CLKS = 1024;
+localparam integer RTX_ACK_TIMEOUT_CLKS = CLK_FREQ_HZ / 1000;
 
 reg [2:0] rst_sr = 3'b000;
 wire      rst_n  = rst_sr[2];
@@ -899,6 +900,7 @@ reg [31:0] rtx_fail_cnt_q;
 reg [31:0] rtx_last_latency_q;
 reg        rtx_tx_active_q;
 reg        rtx_ack_wait_q;
+reg [31:0] rtx_ack_wait_cycle_q;
 reg [10:0] rtx_tx_bit_timer_q;
 reg [5:0]  rtx_tx_bit_idx_q;
 reg [31:0] rtx_tx_seq_q;
@@ -1041,6 +1043,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_last_latency_q <= 32'd0;
         rtx_tx_active_q <= 1'b0;
         rtx_ack_wait_q <= 1'b0;
+        rtx_ack_wait_cycle_q <= 32'd0;
         rtx_tx_bit_timer_q <= 11'd0;
         rtx_tx_bit_idx_q <= 6'd0;
         rtx_tx_seq_q <= 32'd0;
@@ -1067,6 +1070,7 @@ always @(posedge sys_clk or negedge rst_n) begin
             rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
             rtx_wait_accept_q <= 1'b1;
             rtx_ack_wait_q <= 1'b0;
+            rtx_ack_wait_cycle_q <= 32'd0;
         end
         if (rtx_tx_active_q) begin
             if (rtx_tx_bit_timer_q == RTX_BIT_CLKS - 1) begin
@@ -1087,6 +1091,21 @@ always @(posedge sys_clk or negedge rst_n) begin
             rtx_req_out <= 1'b0;
             rtx_seq_out <= 1'b0;
         end
+        if (rtx_ack_wait_q && !rtx_tx_active_q) begin
+            if (rtx_ack_wait_cycle_q >= RTX_ACK_TIMEOUT_CLKS) begin
+                rtx_tx_active_q <= 1'b1;
+                rtx_tx_bit_timer_q <= 11'd0;
+                rtx_tx_bit_idx_q <= 6'd0;
+                rtx_tx_seq_q <= {rtx_orig_seq_q[30:0], 1'b0};
+                rtx_req_out <= 1'b1;
+                rtx_seq_out <= rtx_orig_seq_q[31];
+                rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
+                rtx_req_cycle_q <= latency_cycle_cnt;
+                rtx_ack_wait_cycle_q <= 32'd0;
+            end else begin
+                rtx_ack_wait_cycle_q <= rtx_ack_wait_cycle_q + 32'd1;
+            end
+        end
         if (link_stop_resume_pulse_q) begin
             link_stop_last_latency_q <= link_stop_resume_latency_q;
             if (link_stop_resume_latency_q > link_stop_max_latency_q) begin
@@ -1104,6 +1123,7 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
                 rtx_req_cycle_q <= latency_cycle_cnt;
                 rtx_ack_wait_q <= 1'b1;
+                rtx_ack_wait_cycle_q <= 32'd0;
                 rtx_wait_accept_q <= 1'b0;
             end
         end
