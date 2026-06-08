@@ -27,6 +27,17 @@ set_property PACKAGE_PIN U15 [get_ports frame_sync_in]
 set_property IOSTANDARD LVCMOS33 [get_ports sample_strobe_in]
 set_property IOSTANDARD LVCMOS33 [get_ports frame_sync_in]
 
+## PMOD JC control to TX and ACK back from TX.
+## RX JC1/V15 -> TX JC1/V15 = rtx_req_out
+## RX JC2/W15 -> TX JC2/W15 = rtx_seq_out
+## TX JC3/W14 -> RX JC3/W14 = rtx_ack_in
+set_property PACKAGE_PIN V15 [get_ports rtx_req_out]
+set_property PACKAGE_PIN W15 [get_ports rtx_seq_out]
+set_property PACKAGE_PIN W14 [get_ports rtx_ack_in]
+set_property IOSTANDARD LVCMOS33 [get_ports rtx_req_out]
+set_property IOSTANDARD LVCMOS33 [get_ports rtx_seq_out]
+set_property IOSTANDARD LVCMOS33 [get_ports rtx_ack_in]
+
 set_property PACKAGE_PIN V12 [get_ports uart_tx]
 set_property IOSTANDARD LVCMOS33 [get_ports uart_tx]
 
@@ -39,3 +50,4 @@ set_property IOSTANDARD LVCMOS33 [get_ports {led[*]}]
 set_false_path -from [get_ports {cmp_in[*]}]
 set_false_path -from [get_ports sample_strobe_in]
 set_false_path -from [get_ports frame_sync_in]
+set_false_path -from [get_ports rtx_ack_in]

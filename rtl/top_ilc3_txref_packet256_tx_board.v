@@ -30,6 +30,9 @@ module top_ilc3_txref_packet256_tx_board #(
 ) (
     input  wire       sys_clk,
     input  wire       rst_btn_n,
+    input  wire       rtx_req_in,
+    input  wire       rtx_seq_in,
+    output reg        rtx_ack_out,
 
     output reg  [1:0] pam4_code,
     output reg        pam4_valid,
@@ -52,6 +55,8 @@ localparam integer TAG_GROUPS_PER_FRAME =
     (ENABLE_TAG != 0) ? ((DATA_SYMBOLS_PER_FRAME - 1) / TAG_INTERVAL_SYMBOLS) : 0;
 localparam integer TAG_SAMPLES_PER_FRAME = TAG_GROUPS_PER_FRAME * TAG_PAIR_COUNT * 2;
 localparam [15:0] TX_TAG_SAMPLES_PER_FRAME = TAG_SAMPLES_PER_FRAME;
+localparam integer RTX_BIT_CLKS = 1024;
+localparam [12:0] RTX_ACK_HOLD_COUNT = 13'd4096;
 
 reg [2:0] rst_sr = 3'b000;
 wire      rst_n  = rst_sr[2];
@@ -139,6 +144,22 @@ reg [31:0] tx_high_cnt;
 reg [31:0] tx_mid_cnt;
 reg [31:0] tx_low_cnt;
 reg [31:0] tx_tag_sample_cnt;
+reg        cur_is_replay;
+
+(* ASYNC_REG = "TRUE" *) reg rtx_req_s1, rtx_req_s2, rtx_req_s3;
+(* ASYNC_REG = "TRUE" *) reg rtx_seq_s1, rtx_seq_s2;
+reg        rtx_rx_active_q;
+reg [10:0] rtx_bit_timer_q;
+reg [5:0]  rtx_bit_idx_q;
+reg [31:0] rtx_seq_shift_q;
+reg [31:0] rtx_replay_seq_q;
+reg        rtx_replay_pending_q;
+reg [31:0] rtx_req_cnt_q;
+reg [31:0] rtx_ack_cnt_q;
+reg [31:0] rtx_replay_cnt_q;
+reg [31:0] rtx_last_seq_q;
+reg [12:0] rtx_ack_hold_cnt_q;
+wire       rtx_req_rise_w = rtx_req_s2 && !rtx_req_s3;
 
 reg [7:0] frame_byte;
 always @(*) begin
@@ -219,6 +240,24 @@ always @(posedge sys_clk or negedge rst_n) begin
         tx_mid_cnt    <= 32'd0;
         tx_low_cnt    <= 32'd0;
         tx_tag_sample_cnt <= 32'd0;
+        cur_is_replay <= 1'b0;
+        rtx_req_s1 <= 1'b0;
+        rtx_req_s2 <= 1'b0;
+        rtx_req_s3 <= 1'b0;
+        rtx_seq_s1 <= 1'b0;
+        rtx_seq_s2 <= 1'b0;
+        rtx_rx_active_q <= 1'b0;
+        rtx_bit_timer_q <= 11'd0;
+        rtx_bit_idx_q <= 6'd0;
+        rtx_seq_shift_q <= 32'd0;
+        rtx_replay_seq_q <= 32'd0;
+        rtx_replay_pending_q <= 1'b0;
+        rtx_req_cnt_q <= 32'd0;
+        rtx_ack_cnt_q <= 32'd0;
+        rtx_replay_cnt_q <= 32'd0;
+        rtx_last_seq_q <= 32'd0;
+        rtx_ack_hold_cnt_q <= 13'd0;
+        rtx_ack_out <= 1'b0;
         tag_active    <= 1'b0;
         tag_pair_idx  <= 2'd0;
         tag_sample_idx <= 1'b0;
@@ -227,6 +266,42 @@ always @(posedge sys_clk or negedge rst_n) begin
         pam4_valid    <= 1'b0;
         pam4_sync     <= 1'b0;
     end else begin
+        rtx_req_s1 <= rtx_req_in;
+        rtx_req_s2 <= rtx_req_s1;
+        rtx_req_s3 <= rtx_req_s2;
+        rtx_seq_s1 <= rtx_seq_in;
+        rtx_seq_s2 <= rtx_seq_s1;
+        if (rtx_ack_hold_cnt_q != 13'd0) begin
+            rtx_ack_out <= 1'b1;
+            rtx_ack_hold_cnt_q <= rtx_ack_hold_cnt_q - 13'd1;
+        end else begin
+            rtx_ack_out <= 1'b0;
+        end
+        if (rtx_req_rise_w && !rtx_rx_active_q) begin
+            rtx_rx_active_q <= 1'b1;
+            rtx_bit_timer_q <= (RTX_BIT_CLKS / 2);
+            rtx_bit_idx_q <= 6'd0;
+            rtx_seq_shift_q <= 32'd0;
+            rtx_req_cnt_q <= rtx_req_cnt_q + 32'd1;
+        end else if (rtx_rx_active_q) begin
+            if (rtx_bit_timer_q == RTX_BIT_CLKS - 1) begin
+                rtx_bit_timer_q <= 11'd0;
+                rtx_seq_shift_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
+                if (rtx_bit_idx_q == 6'd31) begin
+                    rtx_rx_active_q <= 1'b0;
+                    rtx_replay_seq_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
+                    rtx_last_seq_q <= {rtx_seq_shift_q[30:0], rtx_seq_s2};
+                    rtx_replay_pending_q <= 1'b1;
+                    rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
+                    rtx_ack_hold_cnt_q <= RTX_ACK_HOLD_COUNT;
+                end else begin
+                    rtx_bit_idx_q <= rtx_bit_idx_q + 6'd1;
+                end
+            end else begin
+                rtx_bit_timer_q <= rtx_bit_timer_q + 11'd1;
+            end
+        end
+
         pam4_code  <= code_from_amp(amp_sample);
         pam4_valid <= (hold_cnt >= STROBE_OFFSET_CLKS) &&
                       (hold_cnt < STROBE_OFFSET_CLKS + STROBE_PULSE_CLKS);
@@ -286,11 +361,30 @@ always @(posedge sys_clk or negedge rst_n) begin
                             crc_acc <= crc16_byte(crc_acc, frame_byte);
                         if (byte_idx == FRAME_BYTES - 1) begin
                             byte_idx <= 9'd0;
-                            pkt_seq  <= pkt_seq + 32'd1;
-                            cur_seq  <= pkt_seq + 32'd1;
                             pkt_cnt  <= pkt_cnt + 32'd1;
                             crc_acc  <= 16'hFFFF;
                             data_sym_since_tag <= 16'd0;
+                            if (cur_is_replay) begin
+                                cur_is_replay <= 1'b0;
+                                if (rtx_replay_pending_q) begin
+                                    cur_seq <= rtx_replay_seq_q;
+                                    rtx_replay_pending_q <= 1'b0;
+                                    rtx_replay_cnt_q <= rtx_replay_cnt_q + 32'd1;
+                                    cur_is_replay <= 1'b1;
+                                end else begin
+                                    cur_seq <= pkt_seq;
+                                end
+                            end else begin
+                                pkt_seq <= pkt_seq + 32'd1;
+                                if (rtx_replay_pending_q) begin
+                                    cur_seq <= rtx_replay_seq_q;
+                                    rtx_replay_pending_q <= 1'b0;
+                                    rtx_replay_cnt_q <= rtx_replay_cnt_q + 32'd1;
+                                    cur_is_replay <= 1'b1;
+                                end else begin
+                                    cur_seq <= pkt_seq + 32'd1;
+                                end
+                            end
                         end else begin
                             byte_idx <= byte_idx + 9'd1;
                         end

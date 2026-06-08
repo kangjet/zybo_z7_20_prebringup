@@ -33,6 +33,9 @@ module top_ilc3_txref_histogram_recovery_rx_board #(
     input  wire [2:0] cmp_in,
     input  wire       sample_strobe_in,
     input  wire       frame_sync_in,
+    input  wire       rtx_ack_in,
+    output reg        rtx_req_out,
+    output reg        rtx_seq_out,
 
     output wire       uart_tx,
     output wire [3:0] led
@@ -71,6 +74,7 @@ localparam [3:0] LINK_STABLE_CLEAN_WINDOWS = 4'd4;
 localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
 localparam [7:0] SELF_CORRECT_MIN_DELAY_8 = SELF_CORRECT_MIN_DELAY;
 localparam [7:0] SELF_CORRECT_MAX_DELAY_8 = SELF_CORRECT_MAX_DELAY;
+localparam integer RTX_BIT_CLKS = 1024;
 
 reg [2:0] rst_sr = 3'b000;
 wire      rst_n  = rst_sr[2];
@@ -893,6 +897,12 @@ reg [31:0] rtx_accept_cnt_q;
 reg [31:0] rtx_match_cnt_q;
 reg [31:0] rtx_fail_cnt_q;
 reg [31:0] rtx_last_latency_q;
+reg        rtx_tx_active_q;
+reg [10:0] rtx_tx_bit_timer_q;
+reg [5:0]  rtx_tx_bit_idx_q;
+reg [31:0] rtx_tx_seq_q;
+(* ASYNC_REG = "TRUE" *) reg rtx_ack_s1, rtx_ack_s2, rtx_ack_s3;
+wire       rtx_ack_rise_w = rtx_ack_s2 && !rtx_ack_s3;
 reg [31:0] log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq;
 
 wire        log_window_due = (log_window_div_cnt == LOG_EVERY_WINDOWS - 1);
@@ -1028,6 +1038,15 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_match_cnt_q <= 32'd0;
         rtx_fail_cnt_q <= 32'd0;
         rtx_last_latency_q <= 32'd0;
+        rtx_tx_active_q <= 1'b0;
+        rtx_tx_bit_timer_q <= 11'd0;
+        rtx_tx_bit_idx_q <= 6'd0;
+        rtx_tx_seq_q <= 32'd0;
+        rtx_ack_s1 <= 1'b0;
+        rtx_ack_s2 <= 1'b0;
+        rtx_ack_s3 <= 1'b0;
+        rtx_req_out <= 1'b0;
+        rtx_seq_out <= 1'b0;
         log_rq <= 32'd0; log_ak <= 32'd0; log_ta <= 32'd0; log_tm <= 32'd0; log_tf <= 32'd0; log_rtl <= 32'd0; log_ox <= 32'd0; log_rxseq <= 32'd0;
         sample_delay_trim_q <= SAMPLE_DELAY_INIT;
         self_correct_dir_q <= 1'b1;
@@ -1039,6 +1058,31 @@ always @(posedge sys_clk or negedge rst_n) begin
         latency_cycle_cnt <= latency_cycle_cnt + 32'd1;
         log_req <= 1'b0;
         rx_soft_recover_q <= 1'b0;
+        rtx_ack_s1 <= rtx_ack_in;
+        rtx_ack_s2 <= rtx_ack_s1;
+        rtx_ack_s3 <= rtx_ack_s2;
+        if (rtx_ack_rise_w) begin
+            rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
+        end
+        if (rtx_tx_active_q) begin
+            if (rtx_tx_bit_timer_q == RTX_BIT_CLKS - 1) begin
+                rtx_tx_bit_timer_q <= 11'd0;
+                if (rtx_tx_bit_idx_q == 6'd31) begin
+                    rtx_tx_active_q <= 1'b0;
+                    rtx_req_out <= 1'b0;
+                    rtx_seq_out <= 1'b0;
+                end else begin
+                    rtx_tx_bit_idx_q <= rtx_tx_bit_idx_q + 6'd1;
+                    rtx_seq_out <= rtx_tx_seq_q[30];
+                    rtx_tx_seq_q <= {rtx_tx_seq_q[30:0], 1'b0};
+                end
+            end else begin
+                rtx_tx_bit_timer_q <= rtx_tx_bit_timer_q + 11'd1;
+            end
+        end else begin
+            rtx_req_out <= 1'b0;
+            rtx_seq_out <= 1'b0;
+        end
         if (link_stop_resume_pulse_q) begin
             link_stop_last_latency_q <= link_stop_resume_latency_q;
             if (link_stop_resume_latency_q > link_stop_max_latency_q) begin
@@ -1046,7 +1090,6 @@ always @(posedge sys_clk or negedge rst_n) begin
             end
             link_stop_latency_sum_q <= link_stop_latency_sum_q + link_stop_resume_latency_q;
             link_stop_latency_valid_cnt_q <= link_stop_latency_valid_cnt_q + 32'd1;
-            rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
             rtx_wait_accept_q <= 1'b1;
         end
         if (pass_pulse && rtx_wait_accept_q) begin
@@ -1071,6 +1114,14 @@ always @(posedge sys_clk or negedge rst_n) begin
                     rtx_req_cycle_q <= latency_cycle_cnt;
                     rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
                     rtx_wait_accept_q <= 1'b0;
+                    if (!rtx_tx_active_q) begin
+                        rtx_tx_active_q <= 1'b1;
+                        rtx_tx_bit_timer_q <= 11'd0;
+                        rtx_tx_bit_idx_q <= 6'd0;
+                        rtx_tx_seq_q <= {last_fail_seq_valid_q ? last_fail_seq_q[30:0] : seq_rx[30:0], 1'b0};
+                        rtx_req_out <= 1'b1;
+                        rtx_seq_out <= last_fail_seq_valid_q ? last_fail_seq_q[31] : seq_rx[31];
+                    end
                 end
                 link_clean_window_cnt_q <= 4'd0;
             end else if (link_stop_active_q) begin
@@ -1148,6 +1199,14 @@ always @(posedge sys_clk or negedge rst_n) begin
                         rtx_req_cycle_q <= latency_cycle_cnt;
                         rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
                         rtx_wait_accept_q <= 1'b0;
+                        if (!rtx_tx_active_q) begin
+                            rtx_tx_active_q <= 1'b1;
+                            rtx_tx_bit_timer_q <= 11'd0;
+                            rtx_tx_bit_idx_q <= 6'd0;
+                            rtx_tx_seq_q <= {last_fail_seq_valid_q ? last_fail_seq_q[30:0] : seq_rx[30:0], 1'b0};
+                            rtx_req_out <= 1'b1;
+                            rtx_seq_out <= last_fail_seq_valid_q ? last_fail_seq_q[31] : seq_rx[31];
+                        end
                         log_sp <= 4'd1;
                         log_sq <= link_stop_cnt_q + 32'd1;
                     end
