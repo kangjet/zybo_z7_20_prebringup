@@ -802,7 +802,7 @@ function [7:0] log_char;
     end
 endfunction
 
-// "ILC3RTX RQ=XXXXXXXX AK=XXXXXXXX TA=XXXXXXXX TM=XXXXXXXX TF=XXXXXXXX TL=XXXXXXXX OX=XXXXXXXX RX=XXXXXXXX\r\n"
+// "ILC3RTX RQ=XXXXXXXX AK=XXXXXXXX TA=XXXXXXXX TM=XXXXXXXX TF=XXXXXXXX TL=XXXXXXXX OX=XXXXXXXX RX=XXXXXXXX AS=X\r\n"
 function [7:0] rtx_log_char;
     input [6:0] ptr;
     input [31:0] rq;
@@ -813,6 +813,7 @@ function [7:0] rtx_log_char;
     input [31:0] tl;
     input [31:0] ox;
     input [31:0] rx;
+    input [3:0]  as;
     begin
         case (ptr)
             7'd0: rtx_log_char="I"; 7'd1: rtx_log_char="L"; 7'd2: rtx_log_char="C"; 7'd3: rtx_log_char="3"; 7'd4: rtx_log_char="R"; 7'd5: rtx_log_char="T"; 7'd6: rtx_log_char="X"; 7'd7: rtx_log_char=" ";
@@ -823,7 +824,8 @@ function [7:0] rtx_log_char;
             7'd56: rtx_log_char="T"; 7'd57: rtx_log_char="F"; 7'd58: rtx_log_char="="; 7'd59: rtx_log_char=nibble_ascii(tf[31:28]); 7'd60: rtx_log_char=nibble_ascii(tf[27:24]); 7'd61: rtx_log_char=nibble_ascii(tf[23:20]); 7'd62: rtx_log_char=nibble_ascii(tf[19:16]); 7'd63: rtx_log_char=nibble_ascii(tf[15:12]); 7'd64: rtx_log_char=nibble_ascii(tf[11:8]); 7'd65: rtx_log_char=nibble_ascii(tf[7:4]); 7'd66: rtx_log_char=nibble_ascii(tf[3:0]); 7'd67: rtx_log_char=" ";
             7'd68: rtx_log_char="T"; 7'd69: rtx_log_char="L"; 7'd70: rtx_log_char="="; 7'd71: rtx_log_char=nibble_ascii(tl[31:28]); 7'd72: rtx_log_char=nibble_ascii(tl[27:24]); 7'd73: rtx_log_char=nibble_ascii(tl[23:20]); 7'd74: rtx_log_char=nibble_ascii(tl[19:16]); 7'd75: rtx_log_char=nibble_ascii(tl[15:12]); 7'd76: rtx_log_char=nibble_ascii(tl[11:8]); 7'd77: rtx_log_char=nibble_ascii(tl[7:4]); 7'd78: rtx_log_char=nibble_ascii(tl[3:0]); 7'd79: rtx_log_char=" ";
             7'd80: rtx_log_char="O"; 7'd81: rtx_log_char="X"; 7'd82: rtx_log_char="="; 7'd83: rtx_log_char=nibble_ascii(ox[31:28]); 7'd84: rtx_log_char=nibble_ascii(ox[27:24]); 7'd85: rtx_log_char=nibble_ascii(ox[23:20]); 7'd86: rtx_log_char=nibble_ascii(ox[19:16]); 7'd87: rtx_log_char=nibble_ascii(ox[15:12]); 7'd88: rtx_log_char=nibble_ascii(ox[11:8]); 7'd89: rtx_log_char=nibble_ascii(ox[7:4]); 7'd90: rtx_log_char=nibble_ascii(ox[3:0]); 7'd91: rtx_log_char=" ";
-            7'd92: rtx_log_char="R"; 7'd93: rtx_log_char="X"; 7'd94: rtx_log_char="="; 7'd95: rtx_log_char=nibble_ascii(rx[31:28]); 7'd96: rtx_log_char=nibble_ascii(rx[27:24]); 7'd97: rtx_log_char=nibble_ascii(rx[23:20]); 7'd98: rtx_log_char=nibble_ascii(rx[19:16]); 7'd99: rtx_log_char=nibble_ascii(rx[15:12]); 7'd100: rtx_log_char=nibble_ascii(rx[11:8]); 7'd101: rtx_log_char=nibble_ascii(rx[7:4]); 7'd102: rtx_log_char=nibble_ascii(rx[3:0]); 7'd103: rtx_log_char=8'h0D; 7'd104: rtx_log_char=8'h0A;
+            7'd92: rtx_log_char="R"; 7'd93: rtx_log_char="X"; 7'd94: rtx_log_char="="; 7'd95: rtx_log_char=nibble_ascii(rx[31:28]); 7'd96: rtx_log_char=nibble_ascii(rx[27:24]); 7'd97: rtx_log_char=nibble_ascii(rx[23:20]); 7'd98: rtx_log_char=nibble_ascii(rx[19:16]); 7'd99: rtx_log_char=nibble_ascii(rx[15:12]); 7'd100: rtx_log_char=nibble_ascii(rx[11:8]); 7'd101: rtx_log_char=nibble_ascii(rx[7:4]); 7'd102: rtx_log_char=nibble_ascii(rx[3:0]); 7'd103: rtx_log_char=" ";
+            7'd104: rtx_log_char="A"; 7'd105: rtx_log_char="S"; 7'd106: rtx_log_char="="; 7'd107: rtx_log_char=nibble_ascii(as); 7'd108: rtx_log_char=8'h0D; 7'd109: rtx_log_char=8'h0A;
             default: rtx_log_char = 8'h00;
         endcase
     end
@@ -907,6 +909,7 @@ reg [31:0] rtx_tx_seq_q;
 (* ASYNC_REG = "TRUE" *) reg rtx_ack_s1, rtx_ack_s2, rtx_ack_s3;
 wire       rtx_ack_rise_w = rtx_ack_s2 && !rtx_ack_s3;
 reg [31:0] log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq;
+reg [3:0]  log_as;
 
 wire        log_window_due = (log_window_div_cnt == LOG_EVERY_WINDOWS - 1);
 wire        self_correct_update_due = (self_correct_window_cnt == SELF_CORRECT_EVERY_WINDOWS - 1);
@@ -1052,7 +1055,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_ack_s3 <= 1'b0;
         rtx_req_out <= 1'b0;
         rtx_seq_out <= 1'b0;
-        log_rq <= 32'd0; log_ak <= 32'd0; log_ta <= 32'd0; log_tm <= 32'd0; log_tf <= 32'd0; log_rtl <= 32'd0; log_ox <= 32'd0; log_rxseq <= 32'd0;
+        log_rq <= 32'd0; log_ak <= 32'd0; log_ta <= 32'd0; log_tm <= 32'd0; log_tf <= 32'd0; log_rtl <= 32'd0; log_ox <= 32'd0; log_rxseq <= 32'd0; log_as <= 4'd0;
         sample_delay_trim_q <= SAMPLE_DELAY_INIT;
         self_correct_dir_q <= 1'b1;
         self_correct_prev_lv_q <= 4'd0;
@@ -1135,6 +1138,8 @@ always @(posedge sys_clk or negedge rst_n) begin
                 rtx_accept_cnt_q <= rtx_accept_cnt_q + 32'd1;
                 rtx_last_latency_q <= latency_cycle_cnt - rtx_req_cycle_q;
                 rtx_wait_accept_q <= 1'b0;
+                rtx_ack_wait_q <= 1'b0;
+                rtx_ack_wait_cycle_q <= 32'd0;
                 rtx_match_cnt_q <= rtx_match_cnt_q + 32'd1;
             end else begin
                 rtx_fail_cnt_q <= rtx_fail_cnt_q + 32'd1;
@@ -1360,6 +1365,7 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_rtl <= rtx_last_latency_q;
             log_ox <= rtx_orig_seq_q;
             log_rxseq <= rtx_accept_seq_q;
+            log_as <= {rtx_ack_wait_q, rtx_ack_s3, rtx_ack_s2, rtx_ack_s1};
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
@@ -1396,13 +1402,13 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_active <= 1'b1; log_rtx_mode <= 1'b0; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
             uart_data <= log_rtx_mode ?
-                         rtx_log_char(log_ptr[6:0], log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq) :
+                         rtx_log_char(log_ptr[6:0], log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq, log_as) :
                          log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv, log_sp, log_sq, log_rt, log_sl, log_sm, log_sa, log_sv);
             uart_start <= 1'b1;
             if (!log_rtx_mode && (log_ptr == 9'd414)) begin
                 log_rtx_mode <= 1'b1;
                 log_ptr <= 9'd0;
-            end else if (log_rtx_mode && (log_ptr == 9'd104)) begin
+            end else if (log_rtx_mode && (log_ptr == 9'd109)) begin
                 log_active <= 1'b0;
                 log_rtx_mode <= 1'b0;
             end else begin
