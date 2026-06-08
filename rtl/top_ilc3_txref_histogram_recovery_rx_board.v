@@ -1063,6 +1063,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_ack_s3 <= rtx_ack_s2;
         if (rtx_ack_rise_w) begin
             rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
+            rtx_wait_accept_q <= 1'b1;
         end
         if (rtx_tx_active_q) begin
             if (rtx_tx_bit_timer_q == RTX_BIT_CLKS - 1) begin
@@ -1090,14 +1091,24 @@ always @(posedge sys_clk or negedge rst_n) begin
             end
             link_stop_latency_sum_q <= link_stop_latency_sum_q + link_stop_resume_latency_q;
             link_stop_latency_valid_cnt_q <= link_stop_latency_valid_cnt_q + 32'd1;
-            rtx_wait_accept_q <= 1'b1;
+            if (!rtx_tx_active_q) begin
+                rtx_tx_active_q <= 1'b1;
+                rtx_tx_bit_timer_q <= 11'd0;
+                rtx_tx_bit_idx_q <= 6'd0;
+                rtx_tx_seq_q <= {rtx_orig_seq_q[30:0], 1'b0};
+                rtx_req_out <= 1'b1;
+                rtx_seq_out <= rtx_orig_seq_q[31];
+                rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
+                rtx_req_cycle_q <= latency_cycle_cnt;
+                rtx_wait_accept_q <= 1'b0;
+            end
         end
         if (pass_pulse && rtx_wait_accept_q) begin
-            rtx_accept_cnt_q <= rtx_accept_cnt_q + 32'd1;
             rtx_accept_seq_q <= seq_rx;
-            rtx_last_latency_q <= latency_cycle_cnt - rtx_req_cycle_q;
-            rtx_wait_accept_q <= 1'b0;
             if (seq_rx == rtx_orig_seq_q) begin
+                rtx_accept_cnt_q <= rtx_accept_cnt_q + 32'd1;
+                rtx_last_latency_q <= latency_cycle_cnt - rtx_req_cycle_q;
+                rtx_wait_accept_q <= 1'b0;
                 rtx_match_cnt_q <= rtx_match_cnt_q + 32'd1;
             end else begin
                 rtx_fail_cnt_q <= rtx_fail_cnt_q + 32'd1;
@@ -1110,18 +1121,8 @@ always @(posedge sys_clk or negedge rst_n) begin
                     link_stop_active_q <= 1'b1;
                     link_stop_cycle_q <= latency_cycle_cnt;
                     link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
-                    rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
-                    rtx_req_cycle_q <= latency_cycle_cnt;
                     rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
                     rtx_wait_accept_q <= 1'b0;
-                    if (!rtx_tx_active_q) begin
-                        rtx_tx_active_q <= 1'b1;
-                        rtx_tx_bit_timer_q <= 11'd0;
-                        rtx_tx_bit_idx_q <= 6'd0;
-                        rtx_tx_seq_q <= {last_fail_seq_valid_q ? last_fail_seq_q[30:0] : seq_rx[30:0], 1'b0};
-                        rtx_req_out <= 1'b1;
-                        rtx_seq_out <= last_fail_seq_valid_q ? last_fail_seq_q[31] : seq_rx[31];
-                    end
                 end
                 link_clean_window_cnt_q <= 4'd0;
             end else if (link_stop_active_q) begin
@@ -1195,18 +1196,8 @@ always @(posedge sys_clk or negedge rst_n) begin
                         link_stop_active_q <= 1'b1;
                         link_stop_cycle_q <= latency_cycle_cnt;
                         link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
-                        rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
-                        rtx_req_cycle_q <= latency_cycle_cnt;
                         rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
                         rtx_wait_accept_q <= 1'b0;
-                        if (!rtx_tx_active_q) begin
-                            rtx_tx_active_q <= 1'b1;
-                            rtx_tx_bit_timer_q <= 11'd0;
-                            rtx_tx_bit_idx_q <= 6'd0;
-                            rtx_tx_seq_q <= {last_fail_seq_valid_q ? last_fail_seq_q[30:0] : seq_rx[30:0], 1'b0};
-                            rtx_req_out <= 1'b1;
-                            rtx_seq_out <= last_fail_seq_valid_q ? last_fail_seq_q[31] : seq_rx[31];
-                        end
                         log_sp <= 4'd1;
                         log_sq <= link_stop_cnt_q + 32'd1;
                     end
