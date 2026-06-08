@@ -67,6 +67,7 @@ localparam [31:0] TR_FAST_PR_TH = 32'd4096;
 // Reject stale recovery timestamps before they pollute RM/RA. Valid recovery
 // samples are bounded to sub-ms timing so wrapped/stale events are excluded.
 localparam [31:0] RECOVERY_LATENCY_MAX_VALID = CLK_FREQ_HZ / 1000;
+localparam [3:0] LINK_STABLE_CLEAN_WINDOWS = 4'd4;
 localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
 localparam [7:0] SELF_CORRECT_MIN_DELAY_8 = SELF_CORRECT_MIN_DELAY;
 localparam [7:0] SELF_CORRECT_MAX_DELAY_8 = SELF_CORRECT_MAX_DELAY;
@@ -691,8 +692,10 @@ endfunction
 //   RM = max recovery latency in sys_clk cycles
 //   RA = accumulated valid recovery latency in sys_clk cycles
 //   RV = valid recovery latency sample count, avg = RA / RV
+//   SP/SQ/RT = link-policy stop-active / stop count / retransmit-resume count
+//   SL/SM/SA/SV = stop-to-resume last/max/sum/sample count in sys_clk cycles
 // Short latency log for timing margin:
-// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX RV=XXXXXXXX\r\n"
+// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX RV=XXXXXXXX SP=X SQ=XXXXXXXX RT=XXXXXXXX SL=XXXXXXXX SM=XXXXXXXX SA=XXXXXXXX SV=XXXXXXXX\r\n"
 function [7:0] log_char;
     input [8:0] ptr;
     input [31:0] pk;
@@ -736,6 +739,13 @@ function [7:0] log_char;
     input [31:0] pj;
     input [7:0]  pl;
     input [31:0] rv;
+    input [3:0]  sp;
+    input [31:0] sq;
+    input [31:0] rt;
+    input [31:0] sl;
+    input [31:0] sm;
+    input [31:0] sa;
+    input [31:0] sv;
     begin
         case (ptr)
             8'd0: log_char="I"; 8'd1: log_char="L"; 8'd2: log_char="C"; 8'd3: log_char="3"; 8'd4: log_char="H"; 8'd5: log_char="S"; 8'd6: log_char="T"; 8'd7: log_char=" ";
@@ -768,7 +778,14 @@ function [7:0] log_char;
             9'd295: log_char="P"; 9'd296: log_char="A"; 9'd297: log_char="="; 9'd298: log_char=nibble_ascii(pa[31:28]); 9'd299: log_char=nibble_ascii(pa[27:24]); 9'd300: log_char=nibble_ascii(pa[23:20]); 9'd301: log_char=nibble_ascii(pa[19:16]); 9'd302: log_char=nibble_ascii(pa[15:12]); 9'd303: log_char=nibble_ascii(pa[11:8]); 9'd304: log_char=nibble_ascii(pa[7:4]); 9'd305: log_char=nibble_ascii(pa[3:0]); 9'd306: log_char=" ";
             9'd307: log_char="P"; 9'd308: log_char="J"; 9'd309: log_char="="; 9'd310: log_char=nibble_ascii(pj[31:28]); 9'd311: log_char=nibble_ascii(pj[27:24]); 9'd312: log_char=nibble_ascii(pj[23:20]); 9'd313: log_char=nibble_ascii(pj[19:16]); 9'd314: log_char=nibble_ascii(pj[15:12]); 9'd315: log_char=nibble_ascii(pj[11:8]); 9'd316: log_char=nibble_ascii(pj[7:4]); 9'd317: log_char=nibble_ascii(pj[3:0]); 9'd318: log_char=" ";
             9'd319: log_char="P"; 9'd320: log_char="L"; 9'd321: log_char="="; 9'd322: log_char=nibble_ascii(pl[7:4]); 9'd323: log_char=nibble_ascii(pl[3:0]); 9'd324: log_char=" ";
-            9'd325: log_char="R"; 9'd326: log_char="V"; 9'd327: log_char="="; 9'd328: log_char=nibble_ascii(rv[31:28]); 9'd329: log_char=nibble_ascii(rv[27:24]); 9'd330: log_char=nibble_ascii(rv[23:20]); 9'd331: log_char=nibble_ascii(rv[19:16]); 9'd332: log_char=nibble_ascii(rv[15:12]); 9'd333: log_char=nibble_ascii(rv[11:8]); 9'd334: log_char=nibble_ascii(rv[7:4]); 9'd335: log_char=nibble_ascii(rv[3:0]); 9'd336: log_char=8'h0D; 9'd337: log_char=8'h0A;
+            9'd325: log_char="R"; 9'd326: log_char="V"; 9'd327: log_char="="; 9'd328: log_char=nibble_ascii(rv[31:28]); 9'd329: log_char=nibble_ascii(rv[27:24]); 9'd330: log_char=nibble_ascii(rv[23:20]); 9'd331: log_char=nibble_ascii(rv[19:16]); 9'd332: log_char=nibble_ascii(rv[15:12]); 9'd333: log_char=nibble_ascii(rv[11:8]); 9'd334: log_char=nibble_ascii(rv[7:4]); 9'd335: log_char=nibble_ascii(rv[3:0]); 9'd336: log_char=" ";
+            9'd337: log_char="S"; 9'd338: log_char="P"; 9'd339: log_char="="; 9'd340: log_char=nibble_ascii(sp); 9'd341: log_char=" ";
+            9'd342: log_char="S"; 9'd343: log_char="Q"; 9'd344: log_char="="; 9'd345: log_char=nibble_ascii(sq[31:28]); 9'd346: log_char=nibble_ascii(sq[27:24]); 9'd347: log_char=nibble_ascii(sq[23:20]); 9'd348: log_char=nibble_ascii(sq[19:16]); 9'd349: log_char=nibble_ascii(sq[15:12]); 9'd350: log_char=nibble_ascii(sq[11:8]); 9'd351: log_char=nibble_ascii(sq[7:4]); 9'd352: log_char=nibble_ascii(sq[3:0]); 9'd353: log_char=" ";
+            9'd354: log_char="R"; 9'd355: log_char="T"; 9'd356: log_char="="; 9'd357: log_char=nibble_ascii(rt[31:28]); 9'd358: log_char=nibble_ascii(rt[27:24]); 9'd359: log_char=nibble_ascii(rt[23:20]); 9'd360: log_char=nibble_ascii(rt[19:16]); 9'd361: log_char=nibble_ascii(rt[15:12]); 9'd362: log_char=nibble_ascii(rt[11:8]); 9'd363: log_char=nibble_ascii(rt[7:4]); 9'd364: log_char=nibble_ascii(rt[3:0]); 9'd365: log_char=" ";
+            9'd366: log_char="S"; 9'd367: log_char="L"; 9'd368: log_char="="; 9'd369: log_char=nibble_ascii(sl[31:28]); 9'd370: log_char=nibble_ascii(sl[27:24]); 9'd371: log_char=nibble_ascii(sl[23:20]); 9'd372: log_char=nibble_ascii(sl[19:16]); 9'd373: log_char=nibble_ascii(sl[15:12]); 9'd374: log_char=nibble_ascii(sl[11:8]); 9'd375: log_char=nibble_ascii(sl[7:4]); 9'd376: log_char=nibble_ascii(sl[3:0]); 9'd377: log_char=" ";
+            9'd378: log_char="S"; 9'd379: log_char="M"; 9'd380: log_char="="; 9'd381: log_char=nibble_ascii(sm[31:28]); 9'd382: log_char=nibble_ascii(sm[27:24]); 9'd383: log_char=nibble_ascii(sm[23:20]); 9'd384: log_char=nibble_ascii(sm[19:16]); 9'd385: log_char=nibble_ascii(sm[15:12]); 9'd386: log_char=nibble_ascii(sm[11:8]); 9'd387: log_char=nibble_ascii(sm[7:4]); 9'd388: log_char=nibble_ascii(sm[3:0]); 9'd389: log_char=" ";
+            9'd390: log_char="S"; 9'd391: log_char="A"; 9'd392: log_char="="; 9'd393: log_char=nibble_ascii(sa[31:28]); 9'd394: log_char=nibble_ascii(sa[27:24]); 9'd395: log_char=nibble_ascii(sa[23:20]); 9'd396: log_char=nibble_ascii(sa[19:16]); 9'd397: log_char=nibble_ascii(sa[15:12]); 9'd398: log_char=nibble_ascii(sa[11:8]); 9'd399: log_char=nibble_ascii(sa[7:4]); 9'd400: log_char=nibble_ascii(sa[3:0]); 9'd401: log_char=" ";
+            9'd402: log_char="S"; 9'd403: log_char="V"; 9'd404: log_char="="; 9'd405: log_char=nibble_ascii(sv[31:28]); 9'd406: log_char=nibble_ascii(sv[27:24]); 9'd407: log_char=nibble_ascii(sv[23:20]); 9'd408: log_char=nibble_ascii(sv[19:16]); 9'd409: log_char=nibble_ascii(sv[15:12]); 9'd410: log_char=nibble_ascii(sv[11:8]); 9'd411: log_char=nibble_ascii(sv[7:4]); 9'd412: log_char=nibble_ascii(sv[3:0]); 9'd413: log_char=8'h0D; 9'd414: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
@@ -788,6 +805,8 @@ reg [31:0] log_txh, log_txt, log_txo;
 reg [31:0] log_lm, log_hm, log_mm, log_pr;
 reg [31:0] log_pc, log_pa, log_pj;
 reg [7:0]  log_pl;
+reg [3:0]  log_sp;
+reg [31:0] log_sq, log_rt, log_sl, log_sm, log_sa, log_sv;
 reg [31:0] prev_hc, prev_mc, prev_lc, prev_ic;
 reg [31:0] prev_pkt_cnt, prev_resync_drop_cnt, prev_partial_drop_cnt;
 reg [31:0] prev_pkt_ng_cnt, prev_byte_err_cnt, prev_crc_err_cnt;
@@ -815,6 +834,20 @@ reg [31:0] dm_max_recovery_latency_q;
 reg [31:0] dm_recovery_latency_sum_q;
 reg [31:0] dm_recovery_latency_valid_cnt_q;
 wire [31:0] dm_recovery_latency_delta_w = latency_cycle_cnt - dm_defer_cycle_q;
+reg        link_stop_active_q;
+reg [3:0]  link_clean_window_cnt_q;
+reg [31:0] link_stop_cycle_q;
+reg [31:0] link_stop_cnt_q;
+reg [31:0] link_retransmit_req_cnt_q;
+reg [31:0] link_stop_last_latency_q;
+reg [31:0] link_stop_max_latency_q;
+reg [31:0] link_stop_latency_sum_q;
+reg [31:0] link_stop_latency_valid_cnt_q;
+reg        link_stop_resume_pulse_q;
+reg [31:0] link_stop_resume_latency_q;
+reg        link_policy_eval_valid_q;
+reg        link_policy_fault_eval_q;
+reg        link_policy_clean_eval_q;
 
 wire        log_window_due = (log_window_div_cnt == LOG_EVERY_WINDOWS - 1);
 wire        self_correct_update_due = (self_correct_window_cnt == SELF_CORRECT_EVERY_WINDOWS - 1);
@@ -880,6 +913,13 @@ wire [7:0]  self_correct_updated_delay =
     sample_delay_trim_q;
 wire        self_correct_failure = ENABLE_SELF_CORRECT && (log_lv == 4'd4);
 wire [7:0]  self_correct_next_delay = self_correct_failure ? SAMPLE_DELAY_INIT : self_correct_updated_delay;
+wire        link_policy_fault_window = (next_dng != 32'd0) || (next_dce != 32'd0);
+wire        link_policy_all_closed = (dm_defer_cnt == (dm_recover_cnt + dm_drop_cnt));
+wire        link_policy_clean_window = (next_lv == 4'd0) &&
+                                       !link_policy_fault_window &&
+                                       !dm_defer_active_q &&
+                                       link_policy_all_closed;
+wire [31:0] link_stop_latency_delta_w = latency_cycle_cnt - link_stop_cycle_q;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -895,6 +935,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         log_txh <= 32'd0; log_txt <= 32'd0; log_txo <= 32'd0;
         log_lm <= 32'd0; log_hm <= 32'd0; log_mm <= 32'd0; log_pr <= 32'd0;
         log_pc <= 32'd0; log_pa <= 32'd0; log_pj <= 32'd0; log_pl <= 8'h00;
+        log_sp <= 4'd0; log_sq <= 32'd0; log_rt <= 32'd0; log_sl <= 32'd0; log_sm <= 32'd0; log_sa <= 32'd0; log_sv <= 32'd0;
         prev_hc <= 32'd0; prev_mc <= 32'd0; prev_lc <= 32'd0; prev_ic <= 32'd0;
         prev_pkt_cnt <= 32'd0; prev_resync_drop_cnt <= 32'd0; prev_partial_drop_cnt <= 32'd0;
         prev_pkt_ng_cnt <= 32'd0; prev_byte_err_cnt <= 32'd0; prev_crc_err_cnt <= 32'd0;
@@ -917,6 +958,20 @@ always @(posedge sys_clk or negedge rst_n) begin
         dm_max_recovery_latency_q <= 32'd0;
         dm_recovery_latency_sum_q <= 32'd0;
         dm_recovery_latency_valid_cnt_q <= 32'd0;
+        link_stop_active_q <= 1'b0;
+        link_clean_window_cnt_q <= 4'd0;
+        link_stop_cycle_q <= 32'd0;
+        link_stop_cnt_q <= 32'd0;
+        link_retransmit_req_cnt_q <= 32'd0;
+        link_stop_last_latency_q <= 32'd0;
+        link_stop_max_latency_q <= 32'd0;
+        link_stop_latency_sum_q <= 32'd0;
+        link_stop_latency_valid_cnt_q <= 32'd0;
+        link_stop_resume_pulse_q <= 1'b0;
+        link_stop_resume_latency_q <= 32'd0;
+        link_policy_eval_valid_q <= 1'b0;
+        link_policy_fault_eval_q <= 1'b0;
+        link_policy_clean_eval_q <= 1'b0;
         sample_delay_trim_q <= SAMPLE_DELAY_INIT;
         self_correct_dir_q <= 1'b1;
         self_correct_prev_lv_q <= 4'd0;
@@ -927,6 +982,42 @@ always @(posedge sys_clk or negedge rst_n) begin
         latency_cycle_cnt <= latency_cycle_cnt + 32'd1;
         log_req <= 1'b0;
         rx_soft_recover_q <= 1'b0;
+        if (link_stop_resume_pulse_q) begin
+            link_stop_last_latency_q <= link_stop_resume_latency_q;
+            if (link_stop_resume_latency_q > link_stop_max_latency_q) begin
+                link_stop_max_latency_q <= link_stop_resume_latency_q;
+            end
+            link_stop_latency_sum_q <= link_stop_latency_sum_q + link_stop_resume_latency_q;
+            link_stop_latency_valid_cnt_q <= link_stop_latency_valid_cnt_q + 32'd1;
+        end
+        link_stop_resume_pulse_q <= 1'b0;
+        if (link_policy_eval_valid_q) begin
+            if (link_policy_fault_eval_q) begin
+                if (!link_stop_active_q) begin
+                    link_stop_active_q <= 1'b1;
+                    link_stop_cycle_q <= latency_cycle_cnt;
+                    link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
+                end
+                link_clean_window_cnt_q <= 4'd0;
+            end else if (link_stop_active_q) begin
+                if (link_policy_clean_eval_q) begin
+                    if (link_clean_window_cnt_q >= (LINK_STABLE_CLEAN_WINDOWS - 4'd1)) begin
+                        link_stop_active_q <= 1'b0;
+                        link_clean_window_cnt_q <= 4'd0;
+                        link_retransmit_req_cnt_q <= link_retransmit_req_cnt_q + 32'd1;
+                        link_stop_resume_latency_q <= link_stop_latency_delta_w;
+                        link_stop_resume_pulse_q <= 1'b1;
+                    end else begin
+                        link_clean_window_cnt_q <= link_clean_window_cnt_q + 4'd1;
+                    end
+                end else begin
+                    link_clean_window_cnt_q <= 4'd0;
+                end
+            end else begin
+                link_clean_window_cnt_q <= 4'd0;
+            end
+        end
+        link_policy_eval_valid_q <= 1'b0;
         if (!dm_defer_active_q && (fail_pulse || pkt_dm_defer_pulse)) begin
             dm_defer_cnt <= dm_defer_cnt + 32'd1;
             log_df <= dm_defer_cnt + 32'd1;
@@ -975,6 +1066,14 @@ always @(posedge sys_clk or negedge rst_n) begin
                     dm_drop_cnt <= dm_drop_cnt + 32'd1;
                     log_rd <= dm_drop_cnt + 32'd1;
                     dm_defer_active_q <= 1'b0;
+                    if (!link_stop_active_q) begin
+                        link_stop_active_q <= 1'b1;
+                        link_stop_cycle_q <= latency_cycle_cnt;
+                        link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
+                        log_sp <= 4'd1;
+                        log_sq <= link_stop_cnt_q + 32'd1;
+                    end
+                    link_clean_window_cnt_q <= 4'd0;
                 end else if ((log_lv == 4'd0) &&
                              (dm_abs_dd_q <= DM_RECOVER_DD_TH)) begin
                     dm_recover_cnt <= dm_recover_cnt + 32'd1;
@@ -1054,6 +1153,9 @@ always @(posedge sys_clk or negedge rst_n) begin
             end
             log_emit_due_q <= log_window_due;
             self_correct_apply_due_q <= self_correct_update_due;
+            link_policy_eval_valid_q <= 1'b1;
+            link_policy_fault_eval_q <= link_policy_fault_window;
+            link_policy_clean_eval_q <= link_policy_clean_window;
             log_pk <= pkt_cnt; log_ok <= pkt_ok_cnt; log_ng <= pkt_ng_cnt; log_be <= byte_err_cnt;
             log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= dm_last_recovery_latency_q; log_dr <= dm_max_recovery_latency_q; log_pi <= dm_recovery_latency_sum_q; log_rv <= dm_recovery_latency_valid_cnt_q; log_lb <= last_byte;
             log_ts <= tag_seen_cnt; log_tv <= tag_valid_cnt; log_tr <= tag_reject_cnt; log_te <= tag_seq_error_cnt; log_tl <= tag_lock_cnt;
@@ -1089,6 +1191,13 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_pa <= pair_correct_accept_cnt;
             log_pj <= pair_correct_reject_cnt;
             log_pl <= pair_correct_last_code;
+            log_sp <= {3'd0, link_stop_active_q};
+            log_sq <= link_stop_cnt_q;
+            log_rt <= link_retransmit_req_cnt_q;
+            log_sl <= link_stop_last_latency_q;
+            log_sm <= link_stop_max_latency_q;
+            log_sa <= link_stop_latency_sum_q;
+            log_sv <= link_stop_latency_valid_cnt_q;
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
@@ -1123,9 +1232,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv);
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv, log_sp, log_sq, log_rt, log_sl, log_sm, log_sa, log_sv);
             uart_start <= 1'b1;
-            if (log_ptr == 9'd337) log_active <= 1'b0;
+            if (log_ptr == 9'd414) log_active <= 1'b0;
             else log_ptr <= log_ptr + 9'd1;
         end
     end
