@@ -470,6 +470,8 @@ always @(posedge sys_clk or negedge rst_n) begin
         last_byte <= 8'd0;
         pass_pulse <= 1'b0;
         fail_pulse <= 1'b0;
+        last_fail_seq_q <= 32'd0;
+        last_fail_seq_valid_q <= 1'b0;
     end else begin
         pass_pulse <= 1'b0;
         fail_pulse <= 1'b0;
@@ -640,6 +642,8 @@ always @(posedge sys_clk or negedge rst_n) begin
                         if (packet_bad_next) begin
                             pkt_ng_cnt <= pkt_ng_cnt + 32'd1;
                             byte_err_cnt <= byte_err_cnt + pkt_byte_err;
+                            last_fail_seq_q <= seq_next;
+                            last_fail_seq_valid_q <= 1'b1;
                         end else begin
                             pkt_ok_cnt <= pkt_ok_cnt + 32'd1;
                             txref_th_latched <= txref_th_rx;
@@ -694,6 +698,8 @@ endfunction
 //   RV = valid recovery latency sample count, avg = RA / RV
 //   SP/SQ/RT = link-policy stop-active / stop count / retransmit-resume count
 //   SL/SM/SA/SV = stop-to-resume last/max/sum/sample count in sys_clk cycles
+//   ILC3RTX is an RX-side transaction monitor. It proves request/resume/accept
+//   accounting and seq matching; it is not a physical TX ACK wire.
 // Short latency log for timing margin:
 // "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX RV=XXXXXXXX SP=X SQ=XXXXXXXX RT=XXXXXXXX SL=XXXXXXXX SM=XXXXXXXX SA=XXXXXXXX SV=XXXXXXXX\r\n"
 function [7:0] log_char;
@@ -791,6 +797,33 @@ function [7:0] log_char;
     end
 endfunction
 
+// "ILC3RTX RQ=XXXXXXXX AK=XXXXXXXX TA=XXXXXXXX TM=XXXXXXXX TF=XXXXXXXX TL=XXXXXXXX OX=XXXXXXXX RX=XXXXXXXX\r\n"
+function [7:0] rtx_log_char;
+    input [6:0] ptr;
+    input [31:0] rq;
+    input [31:0] ak;
+    input [31:0] ta;
+    input [31:0] tm;
+    input [31:0] tf;
+    input [31:0] tl;
+    input [31:0] ox;
+    input [31:0] rx;
+    begin
+        case (ptr)
+            7'd0: rtx_log_char="I"; 7'd1: rtx_log_char="L"; 7'd2: rtx_log_char="C"; 7'd3: rtx_log_char="3"; 7'd4: rtx_log_char="R"; 7'd5: rtx_log_char="T"; 7'd6: rtx_log_char="X"; 7'd7: rtx_log_char=" ";
+            7'd8: rtx_log_char="R"; 7'd9: rtx_log_char="Q"; 7'd10: rtx_log_char="="; 7'd11: rtx_log_char=nibble_ascii(rq[31:28]); 7'd12: rtx_log_char=nibble_ascii(rq[27:24]); 7'd13: rtx_log_char=nibble_ascii(rq[23:20]); 7'd14: rtx_log_char=nibble_ascii(rq[19:16]); 7'd15: rtx_log_char=nibble_ascii(rq[15:12]); 7'd16: rtx_log_char=nibble_ascii(rq[11:8]); 7'd17: rtx_log_char=nibble_ascii(rq[7:4]); 7'd18: rtx_log_char=nibble_ascii(rq[3:0]); 7'd19: rtx_log_char=" ";
+            7'd20: rtx_log_char="A"; 7'd21: rtx_log_char="K"; 7'd22: rtx_log_char="="; 7'd23: rtx_log_char=nibble_ascii(ak[31:28]); 7'd24: rtx_log_char=nibble_ascii(ak[27:24]); 7'd25: rtx_log_char=nibble_ascii(ak[23:20]); 7'd26: rtx_log_char=nibble_ascii(ak[19:16]); 7'd27: rtx_log_char=nibble_ascii(ak[15:12]); 7'd28: rtx_log_char=nibble_ascii(ak[11:8]); 7'd29: rtx_log_char=nibble_ascii(ak[7:4]); 7'd30: rtx_log_char=nibble_ascii(ak[3:0]); 7'd31: rtx_log_char=" ";
+            7'd32: rtx_log_char="T"; 7'd33: rtx_log_char="A"; 7'd34: rtx_log_char="="; 7'd35: rtx_log_char=nibble_ascii(ta[31:28]); 7'd36: rtx_log_char=nibble_ascii(ta[27:24]); 7'd37: rtx_log_char=nibble_ascii(ta[23:20]); 7'd38: rtx_log_char=nibble_ascii(ta[19:16]); 7'd39: rtx_log_char=nibble_ascii(ta[15:12]); 7'd40: rtx_log_char=nibble_ascii(ta[11:8]); 7'd41: rtx_log_char=nibble_ascii(ta[7:4]); 7'd42: rtx_log_char=nibble_ascii(ta[3:0]); 7'd43: rtx_log_char=" ";
+            7'd44: rtx_log_char="T"; 7'd45: rtx_log_char="M"; 7'd46: rtx_log_char="="; 7'd47: rtx_log_char=nibble_ascii(tm[31:28]); 7'd48: rtx_log_char=nibble_ascii(tm[27:24]); 7'd49: rtx_log_char=nibble_ascii(tm[23:20]); 7'd50: rtx_log_char=nibble_ascii(tm[19:16]); 7'd51: rtx_log_char=nibble_ascii(tm[15:12]); 7'd52: rtx_log_char=nibble_ascii(tm[11:8]); 7'd53: rtx_log_char=nibble_ascii(tm[7:4]); 7'd54: rtx_log_char=nibble_ascii(tm[3:0]); 7'd55: rtx_log_char=" ";
+            7'd56: rtx_log_char="T"; 7'd57: rtx_log_char="F"; 7'd58: rtx_log_char="="; 7'd59: rtx_log_char=nibble_ascii(tf[31:28]); 7'd60: rtx_log_char=nibble_ascii(tf[27:24]); 7'd61: rtx_log_char=nibble_ascii(tf[23:20]); 7'd62: rtx_log_char=nibble_ascii(tf[19:16]); 7'd63: rtx_log_char=nibble_ascii(tf[15:12]); 7'd64: rtx_log_char=nibble_ascii(tf[11:8]); 7'd65: rtx_log_char=nibble_ascii(tf[7:4]); 7'd66: rtx_log_char=nibble_ascii(tf[3:0]); 7'd67: rtx_log_char=" ";
+            7'd68: rtx_log_char="T"; 7'd69: rtx_log_char="L"; 7'd70: rtx_log_char="="; 7'd71: rtx_log_char=nibble_ascii(tl[31:28]); 7'd72: rtx_log_char=nibble_ascii(tl[27:24]); 7'd73: rtx_log_char=nibble_ascii(tl[23:20]); 7'd74: rtx_log_char=nibble_ascii(tl[19:16]); 7'd75: rtx_log_char=nibble_ascii(tl[15:12]); 7'd76: rtx_log_char=nibble_ascii(tl[11:8]); 7'd77: rtx_log_char=nibble_ascii(tl[7:4]); 7'd78: rtx_log_char=nibble_ascii(tl[3:0]); 7'd79: rtx_log_char=" ";
+            7'd80: rtx_log_char="O"; 7'd81: rtx_log_char="X"; 7'd82: rtx_log_char="="; 7'd83: rtx_log_char=nibble_ascii(ox[31:28]); 7'd84: rtx_log_char=nibble_ascii(ox[27:24]); 7'd85: rtx_log_char=nibble_ascii(ox[23:20]); 7'd86: rtx_log_char=nibble_ascii(ox[19:16]); 7'd87: rtx_log_char=nibble_ascii(ox[15:12]); 7'd88: rtx_log_char=nibble_ascii(ox[11:8]); 7'd89: rtx_log_char=nibble_ascii(ox[7:4]); 7'd90: rtx_log_char=nibble_ascii(ox[3:0]); 7'd91: rtx_log_char=" ";
+            7'd92: rtx_log_char="R"; 7'd93: rtx_log_char="X"; 7'd94: rtx_log_char="="; 7'd95: rtx_log_char=nibble_ascii(rx[31:28]); 7'd96: rtx_log_char=nibble_ascii(rx[27:24]); 7'd97: rtx_log_char=nibble_ascii(rx[23:20]); 7'd98: rtx_log_char=nibble_ascii(rx[19:16]); 7'd99: rtx_log_char=nibble_ascii(rx[15:12]); 7'd100: rtx_log_char=nibble_ascii(rx[11:8]); 7'd101: rtx_log_char=nibble_ascii(rx[7:4]); 7'd102: rtx_log_char=nibble_ascii(rx[3:0]); 7'd103: rtx_log_char=8'h0D; 7'd104: rtx_log_char=8'h0A;
+            default: rtx_log_char = 8'h00;
+        endcase
+    end
+endfunction
+
 reg [15:0] dm_window_sample_cnt;
 reg [5:0]  log_window_div_cnt;
 reg [3:0]  self_correct_window_cnt;
@@ -848,6 +881,19 @@ reg [31:0] link_stop_resume_latency_q;
 reg        link_policy_eval_valid_q;
 reg        link_policy_fault_eval_q;
 reg        link_policy_clean_eval_q;
+reg [31:0] last_fail_seq_q;
+reg        last_fail_seq_valid_q;
+reg        rtx_wait_accept_q;
+reg [31:0] rtx_req_cycle_q;
+reg [31:0] rtx_orig_seq_q;
+reg [31:0] rtx_accept_seq_q;
+reg [31:0] rtx_request_cnt_q;
+reg [31:0] rtx_ack_cnt_q;
+reg [31:0] rtx_accept_cnt_q;
+reg [31:0] rtx_match_cnt_q;
+reg [31:0] rtx_fail_cnt_q;
+reg [31:0] rtx_last_latency_q;
+reg [31:0] log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq;
 
 wire        log_window_due = (log_window_div_cnt == LOG_EVERY_WINDOWS - 1);
 wire        self_correct_update_due = (self_correct_window_cnt == SELF_CORRECT_EVERY_WINDOWS - 1);
@@ -972,6 +1018,17 @@ always @(posedge sys_clk or negedge rst_n) begin
         link_policy_eval_valid_q <= 1'b0;
         link_policy_fault_eval_q <= 1'b0;
         link_policy_clean_eval_q <= 1'b0;
+        rtx_wait_accept_q <= 1'b0;
+        rtx_req_cycle_q <= 32'd0;
+        rtx_orig_seq_q <= 32'd0;
+        rtx_accept_seq_q <= 32'd0;
+        rtx_request_cnt_q <= 32'd0;
+        rtx_ack_cnt_q <= 32'd0;
+        rtx_accept_cnt_q <= 32'd0;
+        rtx_match_cnt_q <= 32'd0;
+        rtx_fail_cnt_q <= 32'd0;
+        rtx_last_latency_q <= 32'd0;
+        log_rq <= 32'd0; log_ak <= 32'd0; log_ta <= 32'd0; log_tm <= 32'd0; log_tf <= 32'd0; log_rtl <= 32'd0; log_ox <= 32'd0; log_rxseq <= 32'd0;
         sample_delay_trim_q <= SAMPLE_DELAY_INIT;
         self_correct_dir_q <= 1'b1;
         self_correct_prev_lv_q <= 4'd0;
@@ -989,6 +1046,19 @@ always @(posedge sys_clk or negedge rst_n) begin
             end
             link_stop_latency_sum_q <= link_stop_latency_sum_q + link_stop_resume_latency_q;
             link_stop_latency_valid_cnt_q <= link_stop_latency_valid_cnt_q + 32'd1;
+            rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
+            rtx_wait_accept_q <= 1'b1;
+        end
+        if (pass_pulse && rtx_wait_accept_q) begin
+            rtx_accept_cnt_q <= rtx_accept_cnt_q + 32'd1;
+            rtx_accept_seq_q <= seq_rx;
+            rtx_last_latency_q <= latency_cycle_cnt - rtx_req_cycle_q;
+            rtx_wait_accept_q <= 1'b0;
+            if (seq_rx == rtx_orig_seq_q) begin
+                rtx_match_cnt_q <= rtx_match_cnt_q + 32'd1;
+            end else begin
+                rtx_fail_cnt_q <= rtx_fail_cnt_q + 32'd1;
+            end
         end
         link_stop_resume_pulse_q <= 1'b0;
         if (link_policy_eval_valid_q) begin
@@ -997,6 +1067,10 @@ always @(posedge sys_clk or negedge rst_n) begin
                     link_stop_active_q <= 1'b1;
                     link_stop_cycle_q <= latency_cycle_cnt;
                     link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
+                    rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
+                    rtx_req_cycle_q <= latency_cycle_cnt;
+                    rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
+                    rtx_wait_accept_q <= 1'b0;
                 end
                 link_clean_window_cnt_q <= 4'd0;
             end else if (link_stop_active_q) begin
@@ -1070,6 +1144,10 @@ always @(posedge sys_clk or negedge rst_n) begin
                         link_stop_active_q <= 1'b1;
                         link_stop_cycle_q <= latency_cycle_cnt;
                         link_stop_cnt_q <= link_stop_cnt_q + 32'd1;
+                        rtx_request_cnt_q <= rtx_request_cnt_q + 32'd1;
+                        rtx_req_cycle_q <= latency_cycle_cnt;
+                        rtx_orig_seq_q <= last_fail_seq_valid_q ? last_fail_seq_q : seq_rx;
+                        rtx_wait_accept_q <= 1'b0;
                         log_sp <= 4'd1;
                         log_sq <= link_stop_cnt_q + 32'd1;
                     end
@@ -1198,6 +1276,14 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_sm <= link_stop_max_latency_q;
             log_sa <= link_stop_latency_sum_q;
             log_sv <= link_stop_latency_valid_cnt_q;
+            log_rq <= rtx_request_cnt_q;
+            log_ak <= rtx_ack_cnt_q;
+            log_ta <= rtx_accept_cnt_q;
+            log_tm <= rtx_match_cnt_q;
+            log_tf <= rtx_fail_cnt_q;
+            log_rtl <= rtx_last_latency_q;
+            log_ox <= rtx_orig_seq_q;
+            log_rxseq <= rtx_accept_seq_q;
             prev_hc <= hist_high_cnt;
             prev_mc <= hist_mid_cnt;
             prev_lc <= hist_low_cnt;
@@ -1220,22 +1306,32 @@ end
 
 reg [8:0] log_ptr;
 reg       log_active;
+reg       log_rtx_mode;
 reg       uart_start;
 reg [7:0] uart_data;
 wire      uart_busy;
 
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
-        log_ptr <= 9'd0; log_active <= 1'b0; uart_start <= 1'b0; uart_data <= 8'h00;
+        log_ptr <= 9'd0; log_active <= 1'b0; log_rtx_mode <= 1'b0; uart_start <= 1'b0; uart_data <= 8'h00;
     end else begin
         uart_start <= 1'b0;
         if (log_req && !log_active && !uart_busy) begin
-            log_active <= 1'b1; log_ptr <= 9'd0;
+            log_active <= 1'b1; log_rtx_mode <= 1'b0; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv, log_sp, log_sq, log_rt, log_sl, log_sm, log_sa, log_sv);
+            uart_data <= log_rtx_mode ?
+                         rtx_log_char(log_ptr[6:0], log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq) :
+                         log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv, log_sp, log_sq, log_rt, log_sl, log_sm, log_sa, log_sv);
             uart_start <= 1'b1;
-            if (log_ptr == 9'd414) log_active <= 1'b0;
-            else log_ptr <= log_ptr + 9'd1;
+            if (!log_rtx_mode && (log_ptr == 9'd414)) begin
+                log_rtx_mode <= 1'b1;
+                log_ptr <= 9'd0;
+            end else if (log_rtx_mode && (log_ptr == 9'd104)) begin
+                log_active <= 1'b0;
+                log_rtx_mode <= 1'b0;
+            end else begin
+                log_ptr <= log_ptr + 9'd1;
+            end
         end
     end
 end
