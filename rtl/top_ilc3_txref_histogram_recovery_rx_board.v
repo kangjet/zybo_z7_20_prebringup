@@ -64,6 +64,9 @@ localparam [31:0] PKT_DM_DEFER_DD_TH = 32'd512;
 localparam [31:0] PKT_DM_MIN_SAMPLES = 32'd1024;
 localparam [31:0] TR_FAST_HM_TH = 32'd2048;
 localparam [31:0] TR_FAST_PR_TH = 32'd4096;
+// Reject stale recovery timestamps before they pollute RM/RA. Valid recovery
+// samples are bounded to sub-ms timing so wrapped/stale events are excluded.
+localparam [31:0] RECOVERY_LATENCY_MAX_VALID = CLK_FREQ_HZ / 1000;
 localparam [7:0] SAMPLE_DELAY_INIT = SAMPLE_DELAY_CLKS[7:0];
 localparam [7:0] SELF_CORRECT_MIN_DELAY_8 = SELF_CORRECT_MIN_DELAY;
 localparam [7:0] SELF_CORRECT_MAX_DELAY_8 = SELF_CORRECT_MAX_DELAY;
@@ -306,6 +309,7 @@ reg [7:0]  last_byte;
 reg        pass_pulse;
 reg        fail_pulse;
 reg        pkt_dm_active_q;
+reg        pkt_dm_eval_q;
 reg        pkt_dm_defer_pulse;
 reg [31:0] pkt_dm_high_cnt;
 reg [31:0] pkt_dm_mid_cnt;
@@ -353,6 +357,7 @@ reg [7:0]  exp_byte;
 always @(posedge sys_clk or negedge rst_n) begin
     if (!rst_n) begin
         pkt_dm_active_q <= 1'b0;
+        pkt_dm_eval_q <= 1'b0;
         pkt_dm_defer_pulse <= 1'b0;
         pkt_dm_high_cnt <= 32'd0;
         pkt_dm_mid_cnt <= 32'd0;
@@ -365,8 +370,14 @@ always @(posedge sys_clk or negedge rst_n) begin
         pkt_dm_abs_dd_calc <= 32'd0;
     end else begin
         pkt_dm_defer_pulse <= 1'b0;
+        if (pkt_dm_eval_q &&
+            (pkt_dm_abs_dd_calc >= PKT_DM_DEFER_DD_TH)) begin
+            pkt_dm_defer_pulse <= 1'b1;
+        end
+        pkt_dm_eval_q <= 1'b0;
         if (sync_rise || rx_soft_recover_q) begin
             pkt_dm_active_q <= 1'b0;
+            pkt_dm_eval_q <= 1'b0;
             pkt_dm_high_cnt <= 32'd0;
             pkt_dm_mid_cnt <= 32'd0;
             pkt_dm_low_cnt <= 32'd0;
@@ -394,15 +405,14 @@ always @(posedge sys_clk or negedge rst_n) begin
             end
 
             if (packet_symbol_done_w) begin
-                pkt_dm_non_mid_calc = pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt;
-                pkt_dm_base_calc = pkt_dm_non_mid_calc;
-                pkt_dm_dd_calc = pkt_dm_mid_cnt - pkt_dm_base_calc;
-                pkt_dm_abs_dd_calc = abs32_twos(pkt_dm_dd_calc);
-                if (pkt_dm_active_q &&
-                    (pkt_dm_sample_cnt >= PKT_DM_MIN_SAMPLES) &&
-                    (pkt_dm_abs_dd_calc >= PKT_DM_DEFER_DD_TH)) begin
-                    pkt_dm_defer_pulse <= 1'b1;
-                end
+                pkt_dm_non_mid_calc <= pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt;
+                pkt_dm_base_calc <= pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt;
+                pkt_dm_dd_calc <= pkt_dm_mid_cnt -
+                                  (pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt);
+                pkt_dm_abs_dd_calc <= abs32_twos(pkt_dm_mid_cnt -
+                                                 (pkt_dm_high_cnt + pkt_dm_low_cnt + pkt_dm_invalid_cnt));
+                pkt_dm_eval_q <= pkt_dm_active_q &&
+                                 (pkt_dm_sample_cnt >= PKT_DM_MIN_SAMPLES);
                 pkt_dm_active_q <= 1'b0;
             end
         end
@@ -679,9 +689,10 @@ endfunction
 //   FS = frame-sync counter
 //   RL = last recovery latency in sys_clk cycles
 //   RM = max recovery latency in sys_clk cycles
-//   RA = accumulated recovery latency in sys_clk cycles, avg = RA / RC
+//   RA = accumulated valid recovery latency in sys_clk cycles
+//   RV = valid recovery latency sample count, avg = RA / RV
 // Short latency log for timing margin:
-// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX\r\n"
+// "ILC3HST SH=XXXX PK=XXXXXXXX OK=XXXXXXXX NG=XXXXXXXX BE=XXXXXXXX CE=XXXXXXXX DF=XXXXXXXX FS=XXXXXXXX RC=XXXXXXXX RD=XXXXXXXX RL=XXXXXXXX RM=XXXXXXXX RA=XXXXXXXX DM=XXXXXXXX DB=XXXXXXXX DD=XXXXXXXX TH=XXXX TT=XXXX TO=XXXXXXXX LM=XXXXXXXX HM=XXXXXXXX MM=XXXXXXXX PR=XXXXXXXX LV=X SC=XX PC=XXXXXXXX PA=XXXXXXXX PJ=XXXXXXXX PL=XX RV=XXXXXXXX\r\n"
 function [7:0] log_char;
     input [8:0] ptr;
     input [31:0] pk;
@@ -724,6 +735,7 @@ function [7:0] log_char;
     input [31:0] pa;
     input [31:0] pj;
     input [7:0]  pl;
+    input [31:0] rv;
     begin
         case (ptr)
             8'd0: log_char="I"; 8'd1: log_char="L"; 8'd2: log_char="C"; 8'd3: log_char="3"; 8'd4: log_char="H"; 8'd5: log_char="S"; 8'd6: log_char="T"; 8'd7: log_char=" ";
@@ -755,7 +767,8 @@ function [7:0] log_char;
             9'd283: log_char="P"; 9'd284: log_char="C"; 9'd285: log_char="="; 9'd286: log_char=nibble_ascii(pc[31:28]); 9'd287: log_char=nibble_ascii(pc[27:24]); 9'd288: log_char=nibble_ascii(pc[23:20]); 9'd289: log_char=nibble_ascii(pc[19:16]); 9'd290: log_char=nibble_ascii(pc[15:12]); 9'd291: log_char=nibble_ascii(pc[11:8]); 9'd292: log_char=nibble_ascii(pc[7:4]); 9'd293: log_char=nibble_ascii(pc[3:0]); 9'd294: log_char=" ";
             9'd295: log_char="P"; 9'd296: log_char="A"; 9'd297: log_char="="; 9'd298: log_char=nibble_ascii(pa[31:28]); 9'd299: log_char=nibble_ascii(pa[27:24]); 9'd300: log_char=nibble_ascii(pa[23:20]); 9'd301: log_char=nibble_ascii(pa[19:16]); 9'd302: log_char=nibble_ascii(pa[15:12]); 9'd303: log_char=nibble_ascii(pa[11:8]); 9'd304: log_char=nibble_ascii(pa[7:4]); 9'd305: log_char=nibble_ascii(pa[3:0]); 9'd306: log_char=" ";
             9'd307: log_char="P"; 9'd308: log_char="J"; 9'd309: log_char="="; 9'd310: log_char=nibble_ascii(pj[31:28]); 9'd311: log_char=nibble_ascii(pj[27:24]); 9'd312: log_char=nibble_ascii(pj[23:20]); 9'd313: log_char=nibble_ascii(pj[19:16]); 9'd314: log_char=nibble_ascii(pj[15:12]); 9'd315: log_char=nibble_ascii(pj[11:8]); 9'd316: log_char=nibble_ascii(pj[7:4]); 9'd317: log_char=nibble_ascii(pj[3:0]); 9'd318: log_char=" ";
-            9'd319: log_char="P"; 9'd320: log_char="L"; 9'd321: log_char="="; 9'd322: log_char=nibble_ascii(pl[7:4]); 9'd323: log_char=nibble_ascii(pl[3:0]); 9'd324: log_char=8'h0D; 9'd325: log_char=8'h0A;
+            9'd319: log_char="P"; 9'd320: log_char="L"; 9'd321: log_char="="; 9'd322: log_char=nibble_ascii(pl[7:4]); 9'd323: log_char=nibble_ascii(pl[3:0]); 9'd324: log_char=" ";
+            9'd325: log_char="R"; 9'd326: log_char="V"; 9'd327: log_char="="; 9'd328: log_char=nibble_ascii(rv[31:28]); 9'd329: log_char=nibble_ascii(rv[27:24]); 9'd330: log_char=nibble_ascii(rv[23:20]); 9'd331: log_char=nibble_ascii(rv[19:16]); 9'd332: log_char=nibble_ascii(rv[15:12]); 9'd333: log_char=nibble_ascii(rv[11:8]); 9'd334: log_char=nibble_ascii(rv[7:4]); 9'd335: log_char=nibble_ascii(rv[3:0]); 9'd336: log_char=8'h0D; 9'd337: log_char=8'h0A;
             default: log_char = 8'h00;
         endcase
     end
@@ -766,7 +779,7 @@ reg [5:0]  log_window_div_cnt;
 reg [3:0]  self_correct_window_cnt;
 reg        log_emit_due_q;
 reg        self_correct_apply_due_q;
-reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_pi;
+reg [31:0] log_pk, log_ok, log_ng, log_be, log_ce, log_wi, log_fs, log_rs, log_dr, log_pi, log_rv;
 reg [31:0] log_ts, log_tv, log_tr, log_te, log_tl;
 reg [31:0] log_hc, log_mc, log_lc, log_ic;
 reg [31:0] log_dh, log_dm, log_dl, log_di, log_db, log_dd;
@@ -800,6 +813,8 @@ reg [31:0] dm_defer_cycle_q;
 reg [31:0] dm_last_recovery_latency_q;
 reg [31:0] dm_max_recovery_latency_q;
 reg [31:0] dm_recovery_latency_sum_q;
+reg [31:0] dm_recovery_latency_valid_cnt_q;
+wire [31:0] dm_recovery_latency_delta_w = latency_cycle_cnt - dm_defer_cycle_q;
 
 wire        log_window_due = (log_window_div_cnt == LOG_EVERY_WINDOWS - 1);
 wire        self_correct_update_due = (self_correct_window_cnt == SELF_CORRECT_EVERY_WINDOWS - 1);
@@ -873,7 +888,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         self_correct_window_cnt <= 4'd0;
         log_emit_due_q <= 1'b1;
         self_correct_apply_due_q <= 1'b0;
-        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_rs <= 32'd0; log_dr <= 32'd0; log_pi <= 32'd0; log_ts <= 32'd0; log_tv <= 32'd0; log_tr <= 32'd0; log_te <= 32'd0; log_tl <= 32'd0; log_lb <= 8'd0;
+        log_pk <= 32'd0; log_ok <= 32'd0; log_ng <= 32'd0; log_be <= 32'd0; log_ce <= 32'd0; log_wi <= 32'd0; log_fs <= 32'd0; log_rs <= 32'd0; log_dr <= 32'd0; log_pi <= 32'd0; log_rv <= 32'd0; log_ts <= 32'd0; log_tv <= 32'd0; log_tr <= 32'd0; log_te <= 32'd0; log_tl <= 32'd0; log_lb <= 8'd0;
         log_hc <= 32'd0; log_mc <= 32'd0; log_lc <= 32'd0; log_ic <= 32'd0;
         log_dh <= 32'd0; log_dm <= 32'd0; log_dl <= 32'd0; log_di <= 32'd0; log_db <= 32'd0; log_dd <= 32'd0;
         log_df <= 32'd0; log_rc <= 32'd0; log_rd <= 32'd0;
@@ -901,6 +916,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         dm_last_recovery_latency_q <= 32'd0;
         dm_max_recovery_latency_q <= 32'd0;
         dm_recovery_latency_sum_q <= 32'd0;
+        dm_recovery_latency_valid_cnt_q <= 32'd0;
         sample_delay_trim_q <= SAMPLE_DELAY_INIT;
         self_correct_dir_q <= 1'b1;
         self_correct_prev_lv_q <= 4'd0;
@@ -919,16 +935,25 @@ always @(posedge sys_clk or negedge rst_n) begin
         end else if (dm_defer_active_q && pass_pulse) begin
             dm_recover_cnt <= dm_recover_cnt + 32'd1;
             log_rc <= dm_recover_cnt + 32'd1;
-            dm_last_recovery_latency_q <= latency_cycle_cnt - dm_defer_cycle_q;
-            log_rs <= latency_cycle_cnt - dm_defer_cycle_q;
-            if ((latency_cycle_cnt - dm_defer_cycle_q) > dm_max_recovery_latency_q) begin
-                dm_max_recovery_latency_q <= latency_cycle_cnt - dm_defer_cycle_q;
-                log_dr <= latency_cycle_cnt - dm_defer_cycle_q;
+            if (dm_recovery_latency_delta_w <= RECOVERY_LATENCY_MAX_VALID) begin
+                dm_last_recovery_latency_q <= dm_recovery_latency_delta_w;
+                log_rs <= dm_recovery_latency_delta_w;
+                if (dm_recovery_latency_delta_w > dm_max_recovery_latency_q) begin
+                    dm_max_recovery_latency_q <= dm_recovery_latency_delta_w;
+                    log_dr <= dm_recovery_latency_delta_w;
+                end else begin
+                    log_dr <= dm_max_recovery_latency_q;
+                end
+                dm_recovery_latency_sum_q <= dm_recovery_latency_sum_q + dm_recovery_latency_delta_w;
+                log_pi <= dm_recovery_latency_sum_q + dm_recovery_latency_delta_w;
+                dm_recovery_latency_valid_cnt_q <= dm_recovery_latency_valid_cnt_q + 32'd1;
+                log_rv <= dm_recovery_latency_valid_cnt_q + 32'd1;
             end else begin
+                log_rs <= dm_last_recovery_latency_q;
                 log_dr <= dm_max_recovery_latency_q;
+                log_pi <= dm_recovery_latency_sum_q;
+                log_rv <= dm_recovery_latency_valid_cnt_q;
             end
-            dm_recovery_latency_sum_q <= dm_recovery_latency_sum_q + (latency_cycle_cnt - dm_defer_cycle_q);
-            log_pi <= dm_recovery_latency_sum_q + (latency_cycle_cnt - dm_defer_cycle_q);
             dm_defer_active_q <= 1'b0;
         end
         if (log_calc_stage == 2'd1) begin
@@ -954,16 +979,25 @@ always @(posedge sys_clk or negedge rst_n) begin
                              (dm_abs_dd_q <= DM_RECOVER_DD_TH)) begin
                     dm_recover_cnt <= dm_recover_cnt + 32'd1;
                     log_rc <= dm_recover_cnt + 32'd1;
-                    dm_last_recovery_latency_q <= latency_cycle_cnt - dm_defer_cycle_q;
-                    log_rs <= latency_cycle_cnt - dm_defer_cycle_q;
-                    if ((latency_cycle_cnt - dm_defer_cycle_q) > dm_max_recovery_latency_q) begin
-                        dm_max_recovery_latency_q <= latency_cycle_cnt - dm_defer_cycle_q;
-                        log_dr <= latency_cycle_cnt - dm_defer_cycle_q;
+                    if (dm_recovery_latency_delta_w <= RECOVERY_LATENCY_MAX_VALID) begin
+                        dm_last_recovery_latency_q <= dm_recovery_latency_delta_w;
+                        log_rs <= dm_recovery_latency_delta_w;
+                        if (dm_recovery_latency_delta_w > dm_max_recovery_latency_q) begin
+                            dm_max_recovery_latency_q <= dm_recovery_latency_delta_w;
+                            log_dr <= dm_recovery_latency_delta_w;
+                        end else begin
+                            log_dr <= dm_max_recovery_latency_q;
+                        end
+                        dm_recovery_latency_sum_q <= dm_recovery_latency_sum_q + dm_recovery_latency_delta_w;
+                        log_pi <= dm_recovery_latency_sum_q + dm_recovery_latency_delta_w;
+                        dm_recovery_latency_valid_cnt_q <= dm_recovery_latency_valid_cnt_q + 32'd1;
+                        log_rv <= dm_recovery_latency_valid_cnt_q + 32'd1;
                     end else begin
+                        log_rs <= dm_last_recovery_latency_q;
                         log_dr <= dm_max_recovery_latency_q;
+                        log_pi <= dm_recovery_latency_sum_q;
+                        log_rv <= dm_recovery_latency_valid_cnt_q;
                     end
-                    dm_recovery_latency_sum_q <= dm_recovery_latency_sum_q + (latency_cycle_cnt - dm_defer_cycle_q);
-                    log_pi <= dm_recovery_latency_sum_q + (latency_cycle_cnt - dm_defer_cycle_q);
                     dm_defer_active_q <= 1'b0;
                 end
             end else if ((log_lv >= 4'd2) ||
@@ -1021,7 +1055,7 @@ always @(posedge sys_clk or negedge rst_n) begin
             log_emit_due_q <= log_window_due;
             self_correct_apply_due_q <= self_correct_update_due;
             log_pk <= pkt_cnt; log_ok <= pkt_ok_cnt; log_ng <= pkt_ng_cnt; log_be <= byte_err_cnt;
-            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= dm_last_recovery_latency_q; log_dr <= dm_max_recovery_latency_q; log_pi <= dm_recovery_latency_sum_q; log_lb <= last_byte;
+            log_ce <= crc_err_cnt; log_wi <= invalid_cnt; log_fs <= frame_sync_cnt; log_rs <= dm_last_recovery_latency_q; log_dr <= dm_max_recovery_latency_q; log_pi <= dm_recovery_latency_sum_q; log_rv <= dm_recovery_latency_valid_cnt_q; log_lb <= last_byte;
             log_ts <= tag_seen_cnt; log_tv <= tag_valid_cnt; log_tr <= tag_reject_cnt; log_te <= tag_seq_error_cnt; log_tl <= tag_lock_cnt;
             log_hc <= hist_high_cnt; log_mc <= hist_mid_cnt; log_lc <= hist_low_cnt; log_ic <= hist_invalid_cnt;
             log_dh <= next_dh;
@@ -1089,9 +1123,9 @@ always @(posedge sys_clk or negedge rst_n) begin
         if (log_req && !log_active && !uart_busy) begin
             log_active <= 1'b1; log_ptr <= 9'd0;
         end else if (log_active && !uart_busy && !uart_start) begin
-            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl);
+            uart_data <= log_char(log_ptr, log_pk, log_ok, log_ng, log_be, log_ce, log_df, log_fs, log_rs, log_dr, log_pi, log_ts, log_tv, log_tr, log_te, log_tl, log_lb, log_hc, log_mc, log_lc, log_rc, log_dh, log_dm, log_dl, log_rd, log_fg, log_lv, log_sc, log_db, log_dd, log_txh, log_txt, log_txo, log_lm, log_hm, log_mm, log_pr, log_pc, log_pa, log_pj, log_pl, log_rv);
             uart_start <= 1'b1;
-            if (log_ptr == 9'd325) log_active <= 1'b0;
+            if (log_ptr == 9'd337) log_active <= 1'b0;
             else log_ptr <= log_ptr + 9'd1;
         end
     end
