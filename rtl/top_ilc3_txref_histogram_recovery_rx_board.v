@@ -908,6 +908,7 @@ reg [5:0]  rtx_tx_bit_idx_q;
 reg [31:0] rtx_tx_seq_q;
 (* ASYNC_REG = "TRUE" *) reg rtx_ack_s1, rtx_ack_s2, rtx_ack_s3;
 wire       rtx_ack_rise_w = rtx_ack_s2 && !rtx_ack_s3;
+wire       rtx_ack_seen_w = rtx_ack_rise_w || rtx_ack_s2;
 reg [31:0] log_rq, log_ak, log_ta, log_tm, log_tf, log_rtl, log_ox, log_rxseq;
 reg [3:0]  log_as;
 
@@ -1069,7 +1070,7 @@ always @(posedge sys_clk or negedge rst_n) begin
         rtx_ack_s1 <= rtx_ack_in;
         rtx_ack_s2 <= rtx_ack_s1;
         rtx_ack_s3 <= rtx_ack_s2;
-        if (rtx_ack_rise_w && rtx_ack_wait_q) begin
+        if (rtx_ack_seen_w && rtx_ack_wait_q) begin
             rtx_ack_cnt_q <= rtx_ack_cnt_q + 32'd1;
             rtx_wait_accept_q <= 1'b1;
             rtx_ack_wait_q <= 1'b0;
